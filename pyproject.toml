@@ -1,0 +1,12 @@
+[project]
+name = "biotools"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "biopython>=1.86",
+    "biotite>=1.5.0",
+    "numpy>=2.3.5",
+    "py3dmol>=2.5.3",
+]
