@@ -1,5 +1,6 @@
 """Utilities for loading, transforming, and comparing PDB structures."""
 
+import logging
 import re
 import numpy as np
 from collections import defaultdict
@@ -9,6 +10,8 @@ from Bio.PDB import PDBParser, MMCIFParser
 from Bio.PDB.PDBExceptions import PDBConstructionException
 
 from .seqtools import global_alignment_seqs
+
+logger = logging.getLogger(__name__)
 
 _PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -109,14 +112,21 @@ def get_pdb_structure(pdb_id, target_folder = "."):
     
     pdb_error = None
     try:
+        logger.debug("Retrieving PDB structure %s in PDB format", pdb_id)
         pdb_file = pdbl.retrieve_pdb_file(pdb_id, pdir=target_folder, file_format='pdb')
         parser = PDBParser(QUIET=True)
         structure = parser.get_structure(pdb_id, pdb_file)
         return structure
     except (OSError, FileNotFoundError, ValueError, PDBConstructionException) as exc:
         pdb_error = exc
+        logger.warning(
+            "Could not load structure %s in PDB format; trying mmCIF: %s",
+            pdb_id,
+            exc,
+        )
 
     try:
+        logger.debug("Retrieving PDB structure %s in mmCIF format", pdb_id)
         cif_file = pdbl.retrieve_pdb_file(pdb_id, pdir=target_folder, file_format="mmCif")
         parser = MMCIFParser(QUIET=True)
         structure = parser.get_structure(pdb_id, cif_file)
@@ -161,6 +171,8 @@ def convert_cif_to_pdb(cif_file, pdb_file, chain_map=None, return_chain_map=Fals
     io = PDBIO()
     io.set_structure(structure)
     io.save(pdb_file)
+    logger.info("Converted mmCIF file %s to PDB file %s", cif_file, pdb_file)
+    logger.debug("Chain ID mapping used for PDB export: %s", resolved_map)
     if return_chain_map:
         return structure, resolved_map
     return structure
@@ -219,7 +231,11 @@ def extract_chain(structure, chain_id):
     chains_to_keep = []
     for model in struc:
         chains_to_remove = [chain for chain in model if chain.id not in chain_id]
-        # print(f"Remove chains: {[c.id for c in chains_to_remove]}")
+        logger.debug(
+            "Removing chains %s from model %s",
+            [chain.id for chain in chains_to_remove],
+            model.id,
+        )
         for chain in chains_to_remove:
             model.detach_child(chain.id)
         chains_to_keep += [chain for chain in model if chain.id in chain_id]
@@ -240,8 +256,8 @@ def save_structure_to_file(structure, filename):
 
     io = PDBIO()
     io.set_structure(structure, )
-    print(f'save structure to {filename}')
     io.save(filename)
+    logger.info("Saved structure to %s", filename)
 
 def remove_wather_molecules(structure):
     """Remove water molecules and hetero residues from a structure.
@@ -546,13 +562,15 @@ def get_interaction_residues(struc, chain_a, chain_b, cutoff=5.0):
                 interaction.append([a, a_type, b, b_type, dist])
     return interaction
 
-def clip_chain(structure, chain_seqs: dict):
+def clip_chain(structure, chain_seqs: dict, verbose: bool = False):
     """Trim residues from chains that align to gaps in target sequences.
 
     Args:
         structure: Structure modified in place.
         chain_seqs: Dictionary mapping chain IDs to expected amino acid
             sequences.
+        verbose: Log the number and IDs of removed residues for each processed
+            chain.
 
     Returns:
         The modified structure with clipped chains.
@@ -583,7 +601,13 @@ def clip_chain(structure, chain_seqs: dict):
                 if target_residue == '-':
                     remove.append(residue.id)
 
-            print(f'Removed {len(remove)} residues in chain {chain.id}')
+            if verbose:
+                logger.info(
+                    "Removing %d residues from chain %s: %s",
+                    len(remove),
+                    chain.id,
+                    remove,
+                )
             for rm_id in remove:
                 chain.detach_child(rm_id)
                     

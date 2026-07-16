@@ -1,5 +1,7 @@
 """Utilities for sequence alignment, FASTA I/O, and BLAST-based search."""
 
+import logging
+
 import biotite.sequence as sequence
 import biotite.sequence.align as align
 
@@ -7,6 +9,8 @@ import pandas as pd
 import subprocess
 from pathlib import Path
 import tempfile
+
+logger = logging.getLogger(__name__)
 
 def _global_alignment_obj(seq_a, seq_b, gap_penalty=(-10, -1)):
     """Return the optimal global protein alignment for two sequences.
@@ -120,6 +124,7 @@ def dict_to_fasta(seq_dict, save_file):
         for name, seq in seq_dict.items():
             fp.write(f">{name}\n")
             fp.write(f"{seq}\n")
+    logger.info("Wrote %d sequences to %s", len(seq_dict), save_file)
 
 def fasta_to_dict(load_file):
     """Parse a FASTA file into a dictionary keyed by record identifier.
@@ -151,6 +156,7 @@ def fasta_to_dict(load_file):
     if last_name is not None:
         seq_dict[last_name] = current_seq
 
+    logger.debug("Loaded %d sequences from %s", len(seq_dict), load_file)
     return seq_dict
 
 class BlastSearch:
@@ -176,7 +182,8 @@ class BlastSearch:
 
         final_index = Path(str(self.index_file) + ".pdb")
         if not final_index.exists():
-            subprocess.call(
+            logger.info("Creating BLAST protein database at %s", self.index_file)
+            subprocess.run(
                 [
                     'makeblastdb',
                     '-in', input_fasta,
@@ -184,8 +191,11 @@ class BlastSearch:
                     '-parse_seqids',
                     '-title', description,
                     '-out', str(self.index_file)
-                ]
+                ],
+                check=True,
             )
+        else:
+            logger.debug("Using existing BLAST database at %s", self.index_file)
 
     def search(self,
                query_fasta,
@@ -206,9 +216,14 @@ class BlastSearch:
             DataFrame with filtered BLAST hits and parsed PDB identifiers.
         """
         blast_coverage = min_coverage * 100 if min_coverage <= 1 else min_coverage
+        logger.info(
+            "Searching BLAST database %s with query %s",
+            self.index_file,
+            query_fasta,
+        )
         with tempfile.NamedTemporaryFile() as temp:
             out_str = "6 qseqid sseqid pident length qcovs evalue bitscore"
-            subprocess.call(
+            subprocess.run(
                 [
                     "blastp",
                     "-query", query_fasta,
@@ -218,9 +233,12 @@ class BlastSearch:
                     "-max_target_seqs", str(max_targets),
                     "-outfmt", str(out_str)
                 ],
-                stdout=temp
+                stdout=temp,
+                check=True,
             )
-            return self._convert_output_to_df(temp.name)
+            results = self._convert_output_to_df(temp.name)
+            logger.info("BLAST search returned %d filtered hits", len(results))
+            return results
 
     def _convert_output_to_df(self, tempfile_path):
         """Convert tabular BLAST output into a filtered pandas DataFrame.
