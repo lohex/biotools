@@ -659,7 +659,11 @@ def superimpose_PCA(structure, apply_rot=True, apply_shift=True):
     return rot_structure, shift, rot
 
 def reset_index(structure):
-    """Renumber residues in each chain starting from 1.
+    """Safely renumber residues in each chain starting from 1.
+
+    Residues are first assigned unused negative sequence numbers and only then
+    receive their final positive numbers. This avoids transient ID collisions
+    in Biopython's internal chain index.
 
     Args:
         structure: Structure modified in place.
@@ -668,16 +672,48 @@ def reset_index(structure):
         The modified structure with reset residue indices.
     """
     for model in structure:
-        for c, chain in enumerate(model):
-            #chain.id = chr(ord('A') + c) 
-            for i, residue in enumerate(chain):
-                a, _, b = residue.id
-                residue.id = (a, i+1, b)
+        for chain in model:
+            residues = list(chain)
+            final_ids = [
+                (hetero_flag, index, insertion_code)
+                for index, (hetero_flag, _, insertion_code) in enumerate(
+                    (residue.id for residue in residues),
+                    start=1,
+                )
+            ]
+            reserved_ids = {residue.id for residue in residues} | set(final_ids)
+
+            temporary_number = -1
+            for residue in residues:
+                hetero_flag, _, insertion_code = residue.id
+                temporary_id = (
+                    hetero_flag,
+                    temporary_number,
+                    insertion_code,
+                )
+                while temporary_id in reserved_ids or chain.has_id(temporary_id):
+                    temporary_number -= 1
+                    temporary_id = (
+                        hetero_flag,
+                        temporary_number,
+                        insertion_code,
+                    )
+
+                reserved_ids.add(temporary_id)
+                residue.id = temporary_id
+                temporary_number -= 1
+
+            for residue, final_id in zip(residues, final_ids):
+                residue.id = final_id
     
     return structure
 
 def rename_chain(structure, chain_ids):
-    """Rename chains in a structure according to a mapping.
+    """Rename chains in a structure according to a mapping without collisions.
+
+    Renames are applied simultaneously, so mappings such as ``{"A": "B",
+    "B": "C"}`` and swaps such as ``{"A": "B", "B": "A"}`` are safe.
+    All models are validated before the structure is modified.
 
     Args:
         structure: Structure modified in place.
@@ -685,11 +721,43 @@ def rename_chain(structure, chain_ids):
 
     Returns:
         The modified structure with renamed chains.
+
+    Raises:
+        ValueError: If the mapping would produce duplicate chain IDs within a
+            model.
     """
+    plans = []
     for model in structure:
-        for c, chain in enumerate(model):
-            if chain.id in chain_ids.keys():
-                chain.id = chain_ids[chain.id]
+        chains = list(model)
+        final_ids = [chain_ids.get(chain.id, chain.id) for chain in chains]
+        duplicate_ids = {
+            chain_id for chain_id in final_ids if final_ids.count(chain_id) > 1
+        }
+        if duplicate_ids:
+            raise ValueError(
+                f"Chain rename would produce duplicate IDs in model {model.id!r}: "
+                f"{sorted(duplicate_ids)!r}"
+            )
+
+        renames = [
+            (chain, target_id)
+            for chain, target_id in zip(chains, final_ids)
+            if chain.id != target_id
+        ]
+        plans.append((model, renames, set(final_ids)))
+
+    for model, renames, reserved_ids in plans:
+        temporary_renames = []
+        for index, (chain, target_id) in enumerate(renames):
+            temporary_id = f"__biotools_tmp_{index}__"
+            while temporary_id in reserved_ids or model.has_id(temporary_id):
+                temporary_id += "_"
+            reserved_ids.add(temporary_id)
+            chain.id = temporary_id
+            temporary_renames.append((chain, target_id))
+
+        for chain, target_id in temporary_renames:
+            chain.id = target_id
 
     return structure
 
