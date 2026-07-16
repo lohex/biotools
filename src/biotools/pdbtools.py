@@ -421,7 +421,9 @@ def align_homologs(structure1, structure2, chain1, chain2):
         chain2: Chain ID in ``structure2``.
 
     Returns:
-        Copy of ``structure2`` after homolog-based superposition.
+        Copy of the complete ``structure2`` after homolog-based
+        superposition. The selected chains are used only to calculate the
+        transformation.
     """
     from Bio.PDB import Superimposer
 
@@ -435,12 +437,14 @@ def align_homologs(structure1, structure2, chain1, chain2):
     gapped_seq_a, gapped_seq_b = global_alignment_seqs(seqs_a[chain1], seqs_b[chain2])
     homo_selected_a,  homo_selected_b = _identify_homo_aa(gapped_seq_a, gapped_seq_b)
 
-    structure1 = extract_chain(structure1, chain1)
-    atoms1 = [atom for atom in structure1.get_atoms() if atom.get_id() == 'CA']
+    atoms1 = [
+        atom for atom in chain_obj_a.get_atoms() if atom.get_id() == 'CA'
+    ]
     atoms1_aligned = [atom for k, atom in enumerate(atoms1) if k in homo_selected_a]
 
-    structure2 = extract_chain(structure2, chain2)
-    atoms2 = [atom for atom in structure2.get_atoms() if atom.get_id() == 'CA']
+    atoms2 = [
+        atom for atom in chain_obj_b.get_atoms() if atom.get_id() == 'CA'
+    ]
     atoms2_aligned = [atom for k, atom in enumerate(atoms2) if k in homo_selected_b]
     
     si = Superimposer()
