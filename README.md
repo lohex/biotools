@@ -94,6 +94,11 @@ for chain_id, amino_acids in sequences.items():
     print(chain_id, amino_acids)
 ```
 
+PDB/`.ent` is the default download format and mmCIF is used as a fallback. To
+try mmCIF first, pass `prefer_mmcif=True`. The format-specific helpers
+`get_pdb_structure_as_pdb()` and `get_pdb_structure_as_mmcif()` are also
+available when no automatic fallback is desired.
+
 ### Align a complete structure from homologous chains
 
 ```python

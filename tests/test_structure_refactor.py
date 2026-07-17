@@ -1,11 +1,13 @@
 """Regression tests for the split structure API and compatibility facades."""
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from Bio.PDB import Atom, Chain, Model, Residue, Structure
 
 from biotools import pdbtools
+from biotools.structure import io as structure_io
 from biotools.structure import align_homologs, rename_chain, reset_index
 
 
@@ -80,6 +82,31 @@ class StructureRefactorTests(unittest.TestCase):
         self.assertIsNot(aligned, target)
         self.assertEqual({chain.id for chain in aligned[0]}, {"B", "C"})
         self.assertEqual({chain.id for chain in target[0]}, {"B", "C"})
+
+    @patch("biotools.structure.io.get_pdb_structure_as_mmcif")
+    @patch("biotools.structure.io.get_pdb_structure_as_pdb")
+    def test_pdb_loader_uses_mmcif_as_default_fallback(self, load_pdb, load_mmcif):
+        expected = object()
+        load_pdb.side_effect = OSError("PDB unavailable")
+        load_mmcif.return_value = expected
+
+        result = structure_io.get_pdb_structure("1ABC", target_folder="data")
+
+        self.assertIs(result, expected)
+        load_pdb.assert_called_once_with("1abc", "data")
+        load_mmcif.assert_called_once_with("1abc", "data")
+
+    @patch("biotools.structure.io.get_pdb_structure_as_mmcif")
+    @patch("biotools.structure.io.get_pdb_structure_as_pdb")
+    def test_pdb_loader_can_prefer_mmcif(self, load_pdb, load_mmcif):
+        expected = object()
+        load_mmcif.return_value = expected
+
+        result = structure_io.get_pdb_structure("1ABC", prefer_mmcif=True)
+
+        self.assertIs(result, expected)
+        load_mmcif.assert_called_once_with("1abc", ".")
+        load_pdb.assert_not_called()
 
 
 if __name__ == "__main__":

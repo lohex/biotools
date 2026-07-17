@@ -51,44 +51,80 @@ def _resolve_pdb_chain_map(structure, chain_map=None):
     return resolved_map
 
 
-def get_pdb_structure(pdb_id, target_folder="."):
-    """Fetch a structure from the PDB and load it with Biopython."""
+def get_pdb_structure_as_pdb(pdb_id, target_folder="."):
+    """Fetch and parse a structure in legacy PDB/``.ent`` format."""
     from Bio.PDB import PDBList
 
     pdb_id = pdb_id.lower()
-    pdbl = PDBList()
-    pdb_error = None
+    logger.debug("Retrieving PDB structure %s in PDB format", pdb_id)
+    pdb_file = PDBList().retrieve_pdb_file(
+        pdb_id,
+        pdir=target_folder,
+        file_format="pdb",
+    )
+    return PDBParser(QUIET=True).get_structure(pdb_id, pdb_file)
+
+
+def get_pdb_structure_as_mmcif(pdb_id, target_folder="."):
+    """Fetch and parse a structure in mmCIF format."""
+    from Bio.PDB import PDBList
+
+    pdb_id = pdb_id.lower()
+    logger.debug("Retrieving PDB structure %s in mmCIF format", pdb_id)
+    cif_file = PDBList().retrieve_pdb_file(
+        pdb_id,
+        pdir=target_folder,
+        file_format="mmCif",
+    )
+    return MMCIFParser(QUIET=True).get_structure(pdb_id, cif_file)
+
+
+def get_pdb_structure(pdb_id, target_folder=".", prefer_mmcif=False):
+    """Fetch a structure with an automatic format fallback.
+
+    PDB/``.ent`` is attempted first by default. Set ``prefer_mmcif=True`` to
+    attempt mmCIF first instead. In either case, the other format is used as a
+    fallback if downloading or parsing the preferred format fails.
+
+    Args:
+        pdb_id: Four-character PDB identifier.
+        target_folder: Directory used to store downloaded structure files.
+        prefer_mmcif: Attempt mmCIF before legacy PDB/``.ent`` format.
+
+    Returns:
+        Loaded Biopython structure object.
+
+    Raises:
+        RuntimeError: If neither format can be downloaded and parsed.
+    """
+    pdb_id = pdb_id.lower()
+
+    if prefer_mmcif:
+        first_format, first_loader = ("mmCIF", get_pdb_structure_as_mmcif)
+        fallback_format, fallback_loader = ("PDB", get_pdb_structure_as_pdb)
+    else:
+        first_format, first_loader = ("PDB", get_pdb_structure_as_pdb)
+        fallback_format, fallback_loader = ("mmCIF", get_pdb_structure_as_mmcif)
+
     try:
-        logger.debug("Retrieving PDB structure %s in PDB format", pdb_id)
-        pdb_file = pdbl.retrieve_pdb_file(
-            pdb_id,
-            pdir=target_folder,
-            file_format="pdb",
-        )
-        return PDBParser(QUIET=True).get_structure(pdb_id, pdb_file)
+        return first_loader(pdb_id, target_folder)
     except (OSError, FileNotFoundError, ValueError, PDBConstructionException) as exc:
-        pdb_error = exc
+        first_error = exc
         logger.warning(
-            "Could not load structure %s in PDB format; trying mmCIF: %s",
+            "Could not load structure %s in %s format; trying %s: %s",
             pdb_id,
+            first_format,
+            fallback_format,
             exc,
         )
 
     try:
-        logger.debug("Retrieving PDB structure %s in mmCIF format", pdb_id)
-        cif_file = pdbl.retrieve_pdb_file(
-            pdb_id,
-            pdir=target_folder,
-            file_format="mmCif",
-        )
-        return MMCIFParser(QUIET=True).get_structure(pdb_id, cif_file)
+        return fallback_loader(pdb_id, target_folder)
     except (OSError, FileNotFoundError, ValueError, PDBConstructionException) as exc:
-        if pdb_error is not None:
-            raise RuntimeError(
-                f"Failed to load structure {pdb_id!r} as PDB ({pdb_error}) "
-                f"and mmCIF ({exc})"
-            ) from exc
-        raise RuntimeError(f"Failed to load structure {pdb_id!r} as mmCIF") from exc
+        raise RuntimeError(
+            f"Failed to load structure {pdb_id!r} as {first_format} "
+            f"({first_error}) and {fallback_format} ({exc})"
+        ) from exc
 
 
 def convert_cif_to_pdb(cif_file, pdb_file, chain_map=None, return_chain_map=False):

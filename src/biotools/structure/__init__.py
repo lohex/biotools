@@ -25,6 +25,8 @@ from .geometry import (
 from .io import (
     convert_cif_to_pdb,
     get_pdb_structure,
+    get_pdb_structure_as_mmcif,
+    get_pdb_structure_as_pdb,
     get_seqres_from_pdb,
     load_pdb_from_file,
     map_three_to_one,
@@ -44,6 +46,8 @@ __all__ = [
     "get_interaction_residues",
     "get_min_dist",
     "get_pdb_structure",
+    "get_pdb_structure_as_mmcif",
+    "get_pdb_structure_as_pdb",
     "get_residue_coords",
     "get_rmsd",
     "get_seqres_from_pdb",
