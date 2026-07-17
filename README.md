@@ -14,7 +14,7 @@ for analysis scripts and notebooks rather than as a command-line application.
 
 ### Protein structures
 
-The `biotools.pdbtools` module provides utilities to:
+The `biotools.structure` package provides utilities to:
 
 - download structures from the Protein Data Bank, with automatic PDB-to-mmCIF
   fallback;
@@ -32,12 +32,18 @@ including chain swaps such as `A -> B` and `B -> A`.
 
 ### Sequences
 
-The `biotools.seqtools` module supports:
+The `biotools.sequence` package supports:
 
 - global protein-sequence alignment using Biotite;
 - alignment scores, identity, and similarity calculations;
 - reading and writing simple FASTA files; and
 - creating and searching local protein BLAST databases.
+
+The implementation is organized into focused modules such as
+`biotools.structure.alignment`, `biotools.structure.chains`,
+`biotools.sequence.alignment`, and `biotools.sequence.blast`. The original
+`biotools.pdbtools` and `biotools.seqtools` modules remain available as
+backward-compatible import facades.
 
 ### Molecular dynamics
 
@@ -79,7 +85,7 @@ uv sync
 ### Download and inspect a structure
 
 ```python
-from biotools.pdbtools import get_aa_sequence, get_pdb_structure
+from biotools.structure import get_aa_sequence, get_pdb_structure
 
 structure = get_pdb_structure("1crn", target_folder="structures")
 sequences = get_aa_sequence(structure, show_gaps=False)
@@ -91,7 +97,7 @@ for chain_id, amino_acids in sequences.items():
 ### Align a complete structure from homologous chains
 
 ```python
-from biotools.pdbtools import align_homologs, load_pdb_from_file
+from biotools.structure import align_homologs, load_pdb_from_file
 
 reference = load_pdb_from_file("reference.pdb")
 mobile = load_pdb_from_file("mobile.pdb")
@@ -104,7 +110,7 @@ aligned = align_homologs(reference, mobile, chain1="A", chain2="B")
 ### Safely rename and renumber chains
 
 ```python
-from biotools.pdbtools import rename_chain, reset_index
+from biotools.structure import rename_chain, reset_index
 
 # Simultaneous swaps and chained renames are handled without ID collisions.
 rename_chain(structure, {"A": "B", "B": "A"})
@@ -114,7 +120,7 @@ reset_index(structure)
 ### Compare protein sequences
 
 ```python
-from biotools.seqtools import (
+from biotools.sequence import (
     global_alignment_identity,
     global_alignment_seqs,
     global_alignment_similarity,
@@ -136,7 +142,7 @@ print(f"Similarity: {similarity:.1f}%")
 ### Search a local BLAST database
 
 ```python
-from biotools.seqtools import BlastSearch
+from biotools.sequence import BlastSearch
 
 database = BlastSearch(
     input_fasta="proteins.fasta",
@@ -161,7 +167,7 @@ logging.basicConfig(level=logging.INFO)
 For more detailed diagnostics, set the level of an individual module logger:
 
 ```python
-logging.getLogger("biotools.pdbtools").setLevel(logging.DEBUG)
+logging.getLogger("biotools.structure").setLevel(logging.DEBUG)
 ```
 
 ## Development status
