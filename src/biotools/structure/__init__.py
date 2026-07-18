@@ -17,6 +17,7 @@ from .chains import (
 )
 from .geometry import (
     get_interaction_residues,
+    get_interaction_residues_full,
     get_min_dist,
     get_residue_coords,
     move_to_center,
@@ -44,6 +45,7 @@ __all__ = [
     "get_aa_sequence",
     "get_alignment",
     "get_interaction_residues",
+    "get_interaction_residues_full",
     "get_min_dist",
     "get_pdb_structure",
     "get_pdb_structure_as_mmcif",
