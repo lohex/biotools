@@ -1,19 +1,41 @@
 """Loading, saving, and format conversion for protein structures."""
 
+from __future__ import annotations
+
 from collections import defaultdict
 import logging
+from os import PathLike
 import re
+from typing import Mapping, TYPE_CHECKING
 
 from Bio.PDB import MMCIFParser, PDBParser
 from Bio.PDB.PDBExceptions import PDBConstructionException
+
+if TYPE_CHECKING:
+    from Bio.PDB.Structure import Structure
 
 logger = logging.getLogger(__name__)
 
 _PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 
-def _resolve_pdb_chain_map(structure, chain_map=None):
-    """Build a one-character chain ID mapping for PDB export."""
+def _resolve_pdb_chain_map(
+    structure: Structure,
+    chain_map: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Build a one-character chain ID mapping for PDB export.
+
+    Args:
+        structure: Structure whose chains need PDB-compatible identifiers.
+        chain_map: Optional explicit mapping from source to target chain IDs.
+
+    Returns:
+        Complete mapping for every chain in ``structure``.
+
+    Raises:
+        ValueError: If an explicit ID is invalid or duplicated, or if the
+            structure contains more chains than PDB format can represent.
+    """
     chain_map = {} if chain_map is None else dict(chain_map)
     resolved_map = {}
     used_ids = set()
@@ -51,8 +73,24 @@ def _resolve_pdb_chain_map(structure, chain_map=None):
     return resolved_map
 
 
-def get_pdb_structure_as_pdb(pdb_id, target_folder="."):
-    """Fetch and parse a structure in legacy PDB/``.ent`` format."""
+def get_pdb_structure_as_pdb(
+    pdb_id: str,
+    target_folder: str | PathLike[str] = ".",
+) -> Structure:
+    """Fetch and parse a structure in legacy PDB/``.ent`` format.
+
+    Args:
+        pdb_id: Four-character Protein Data Bank identifier.
+        target_folder: Directory in which the downloaded file is stored.
+
+    Returns:
+        Parsed Biopython structure.
+
+    Raises:
+        OSError: If the file cannot be downloaded or read.
+        ValueError: If the identifier or downloaded structure is invalid.
+        PDBConstructionException: If Biopython cannot construct the structure.
+    """
     from Bio.PDB import PDBList
 
     pdb_id = pdb_id.lower()
@@ -65,8 +103,24 @@ def get_pdb_structure_as_pdb(pdb_id, target_folder="."):
     return PDBParser(QUIET=True).get_structure(pdb_id, pdb_file)
 
 
-def get_pdb_structure_as_mmcif(pdb_id, target_folder="."):
-    """Fetch and parse a structure in mmCIF format."""
+def get_pdb_structure_as_mmcif(
+    pdb_id: str,
+    target_folder: str | PathLike[str] = ".",
+) -> Structure:
+    """Fetch and parse a structure in mmCIF format.
+
+    Args:
+        pdb_id: Four-character Protein Data Bank identifier.
+        target_folder: Directory in which the downloaded file is stored.
+
+    Returns:
+        Parsed Biopython structure.
+
+    Raises:
+        OSError: If the file cannot be downloaded or read.
+        ValueError: If the identifier or downloaded structure is invalid.
+        PDBConstructionException: If Biopython cannot construct the structure.
+    """
     from Bio.PDB import PDBList
 
     pdb_id = pdb_id.lower()
@@ -79,7 +133,11 @@ def get_pdb_structure_as_mmcif(pdb_id, target_folder="."):
     return MMCIFParser(QUIET=True).get_structure(pdb_id, cif_file)
 
 
-def get_pdb_structure(pdb_id, target_folder=".", prefer_mmcif=False):
+def get_pdb_structure(
+    pdb_id: str,
+    target_folder: str | PathLike[str] = ".",
+    prefer_mmcif: bool = False,
+) -> Structure:
     """Fetch a structure with an automatic format fallback.
 
     PDB/``.ent`` is attempted first by default. Set ``prefer_mmcif=True`` to
@@ -127,8 +185,27 @@ def get_pdb_structure(pdb_id, target_folder=".", prefer_mmcif=False):
         ) from exc
 
 
-def convert_cif_to_pdb(cif_file, pdb_file, chain_map=None, return_chain_map=False):
-    """Convert an mmCIF structure file to PDB format."""
+def convert_cif_to_pdb(
+    cif_file: str | PathLike[str],
+    pdb_file: str | PathLike[str],
+    chain_map: Mapping[str, str] | None = None,
+    return_chain_map: bool = False,
+) -> Structure | tuple[Structure, dict[str, str]]:
+    """Convert an mmCIF structure file to PDB format.
+
+    Args:
+        cif_file: Source mmCIF file.
+        pdb_file: Destination PDB file.
+        chain_map: Optional explicit one-character chain ID mapping.
+        return_chain_map: Return the resolved mapping along with the structure.
+
+    Returns:
+        Converted structure, optionally paired with the resolved chain map.
+
+    Raises:
+        ValueError: If chain identifiers cannot be represented safely in PDB.
+        OSError: If an input or output file cannot be accessed.
+    """
     from Bio.PDB import PDBIO
 
     structure = MMCIFParser(QUIET=True).get_structure("struct", cif_file)
@@ -149,13 +226,28 @@ def convert_cif_to_pdb(cif_file, pdb_file, chain_map=None, return_chain_map=Fals
     return structure
 
 
-def load_pdb_from_file(pdb_file):
-    """Load a PDB structure from a local file."""
+def load_pdb_from_file(pdb_file: str | PathLike[str]) -> Structure:
+    """Load a PDB structure from a local file.
+
+    Args:
+        pdb_file: Local PDB file to parse.
+
+    Returns:
+        Parsed Biopython structure.
+    """
     return PDBParser(QUIET=True).get_structure("struct", pdb_file)
 
 
-def save_structure_to_file(structure, filename):
-    """Write a structure to a PDB file."""
+def save_structure_to_file(
+    structure: Structure,
+    filename: str | PathLike[str],
+) -> None:
+    """Write a structure to a PDB file.
+
+    Args:
+        structure: Biopython structure to serialize.
+        filename: Destination PDB path.
+    """
     from Bio.PDB import PDBIO
 
     io = PDBIO()
@@ -164,8 +256,16 @@ def save_structure_to_file(structure, filename):
     logger.info("Saved structure to %s", filename)
 
 
-def map_three_to_one(res):
-    """Map a three-letter residue code to a one-letter amino acid code."""
+def map_three_to_one(res: str | None) -> str:
+    """Map a three-letter residue code to a one-letter amino-acid code.
+
+    Args:
+        res: Three-letter residue name in any letter case.
+
+    Returns:
+        One-letter code, including supported ambiguous and nonstandard codes;
+        unknown or empty residue names yield ``"X"``.
+    """
     from Bio.Data import IUPACData
 
     iupac_map = IUPACData.protein_letters_3to1
@@ -178,12 +278,21 @@ def map_three_to_one(res):
     return fallbacks.get(res.upper(), "X")
 
 
-def get_seqres_from_pdb(pdb_file):
-    """Extract SEQRES sequences from a PDB text file."""
+def get_seqres_from_pdb(
+    pdb_file: str | PathLike[str],
+) -> dict[str, str]:
+    """Extract SEQRES sequences from a PDB text file.
+
+    Args:
+        pdb_file: PDB text file containing SEQRES records.
+
+    Returns:
+        Mapping from chain ID to one-letter amino-acid sequence.
+    """
     with open(pdb_file, "r") as fp:
         pdb_lines = fp.readlines()
 
-    seqres = defaultdict(list)
+    seqres: defaultdict[str, list[str]] = defaultdict(list)
     seqres_line = re.compile(r"^SEQRES\s+\d+\s+([A-Z])\s+\d+\s+(.*?)\s+$")
     for line in pdb_lines:
         match = seqres_line.match(line)

@@ -1,30 +1,69 @@
 """Chain selection, sequence extraction, and safe identifier manipulation."""
 
+from __future__ import annotations
+
+from collections.abc import Collection, Mapping
 import logging
+from typing import TYPE_CHECKING
 
 from Bio.PDB.Polypeptide import is_aa
 
 from ..sequence.alignment import global_alignment_seqs
 from .io import map_three_to_one
 
+if TYPE_CHECKING:
+    from Bio.PDB.Chain import Chain
+    from Bio.PDB.Residue import Residue
+    from Bio.PDB.Structure import Structure
+
 logger = logging.getLogger(__name__)
 
 
-def _get_chain(structure, chain_id):
-    """Return a chain object by ID or raise a descriptive error."""
+def _get_chain(structure: Structure, chain_id: str) -> Chain:
+    """Return a chain object by ID.
+
+    Args:
+        structure: Structure to search across all models.
+        chain_id: Identifier of the requested chain.
+
+    Returns:
+        First matching chain in structure iteration order.
+
+    Raises:
+        ValueError: If the structure contains no matching chain.
+    """
     for chain in structure.get_chains():
         if chain.id == chain_id:
             return chain
     raise ValueError(f"Chain {chain_id!r} not found in structure")
 
 
-def _get_protein_residues(chain):
-    """Return amino acid residues from a chain."""
+def _get_protein_residues(chain: Chain) -> list[Residue]:
+    """Return amino-acid residues from a chain.
+
+    Args:
+        chain: Biopython chain to inspect.
+
+    Returns:
+        Residues recognized as amino acids by Biopython.
+    """
     return [residue for residue in chain.get_residues() if is_aa(residue)]
 
 
-def _validate_chain_for_protein_alignment(chain):
-    """Validate a chain for protein index-based alignment logic."""
+def _validate_chain_for_protein_alignment(chain: Chain) -> list[Residue]:
+    """Validate a chain for protein index-based alignment logic.
+
+    Args:
+        chain: Chain expected to contain only protein residues with C-alpha
+            atoms.
+
+    Returns:
+        Validated amino-acid residues in chain order.
+
+    Raises:
+        ValueError: If non-protein residues occur or the residue and C-alpha
+            atom counts differ.
+    """
     hetero_residues = [
         residue for residue in chain.get_residues() if not is_aa(residue)
     ]
@@ -48,8 +87,22 @@ def _validate_chain_for_protein_alignment(chain):
     return protein_residues
 
 
-def extract_chain(structure, chain_id):
-    """Return a copy of the structure containing only selected chains."""
+def extract_chain(
+    structure: Structure,
+    chain_id: str | Collection[str],
+) -> Structure:
+    """Return a copy of a structure containing only selected chains.
+
+    Args:
+        structure: Source structure, which remains unchanged.
+        chain_id: One chain ID or a collection of IDs to retain.
+
+    Returns:
+        Structure copy containing only the requested chains.
+
+    Raises:
+        Exception: If none of the requested chains exist.
+    """
     if isinstance(chain_id, str):
         chain_id = [chain_id]
     selected = structure.copy()
@@ -70,8 +123,15 @@ def extract_chain(structure, chain_id):
     return selected
 
 
-def remove_wather_molecules(structure):
-    """Remove water molecules and hetero residues from a structure."""
+def remove_wather_molecules(structure: Structure) -> Structure:
+    """Remove water molecules and all hetero residues in place.
+
+    Args:
+        structure: Structure to modify.
+
+    Returns:
+        The same modified structure object.
+    """
     for model in structure:
         for chain in model:
             residues_to_remove = [
@@ -85,9 +145,20 @@ def remove_wather_molecules(structure):
     return structure
 
 
-def get_aa_sequence(structure, show_gaps=True):
-    """Extract per-chain amino acid sequences from a structure."""
-    chain_seqs = {}
+def get_aa_sequence(
+    structure: Structure,
+    show_gaps: bool = True,
+) -> dict[str, str]:
+    """Extract per-chain amino-acid sequences from a structure.
+
+    Args:
+        structure: Structure containing the chains to inspect.
+        show_gaps: Insert ``"-"`` for missing integer residue numbers.
+
+    Returns:
+        Mapping from chain ID to one-letter amino-acid sequence.
+    """
+    chain_seqs: dict[str, str] = {}
     for chain in structure.get_chains():
         chain_id = chain.get_id()
         last_res_id = None
@@ -104,8 +175,25 @@ def get_aa_sequence(structure, show_gaps=True):
     return chain_seqs
 
 
-def clip_chain(structure, chain_seqs: dict, verbose: bool = False):
-    """Trim residues from chains that align to gaps in target sequences."""
+def clip_chain(
+    structure: Structure,
+    chain_seqs: Mapping[str, str],
+    verbose: bool = False,
+) -> Structure:
+    """Trim residues that align to gaps in target chain sequences.
+
+    Args:
+        structure: Structure to modify in place.
+        chain_seqs: Target amino-acid sequence for each chain to process.
+        verbose: Log removed residue IDs at informational level.
+
+    Returns:
+        The same modified structure object.
+
+    Raises:
+        ValueError: If a selected chain contains non-protein residues, lacks a
+            C-alpha atom, or cannot be mapped cleanly to its alignment.
+    """
     seqs = get_aa_sequence(structure, show_gaps=False)
     for chain in structure.get_chains():
         if chain.id not in chain_seqs:
@@ -145,8 +233,18 @@ def clip_chain(structure, chain_seqs: dict, verbose: bool = False):
     return structure
 
 
-def reset_index(structure):
-    """Safely renumber residues in each chain starting from 1."""
+def reset_index(structure: Structure) -> Structure:
+    """Safely renumber residues in every chain starting from one.
+
+    Free negative IDs are used temporarily to avoid collisions in Biopython's
+    child index. Hetero flags and insertion codes are preserved.
+
+    Args:
+        structure: Structure to renumber in place.
+
+    Returns:
+        The same renumbered structure object.
+    """
     for model in structure:
         for chain in model:
             residues = list(chain)
@@ -174,8 +272,24 @@ def reset_index(structure):
     return structure
 
 
-def rename_chain(structure, chain_ids):
-    """Rename chains simultaneously according to a mapping without collisions."""
+def rename_chain(
+    structure: Structure,
+    chain_ids: Mapping[str, str],
+) -> Structure:
+    """Rename chains simultaneously according to a mapping.
+
+    Temporary IDs prevent collisions during swaps and chained renames.
+
+    Args:
+        structure: Structure whose chains are modified in place.
+        chain_ids: Mapping from current chain IDs to desired IDs.
+
+    Returns:
+        The same structure with renamed chains.
+
+    Raises:
+        ValueError: If the mapping would create duplicate IDs within a model.
+    """
     plans = []
     for model in structure:
         chains = list(model)

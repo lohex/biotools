@@ -47,8 +47,10 @@ backward-compatible import facades.
 
 ### Molecular dynamics
 
-`biotools.mdtools` is reserved for OpenMM-based molecular-dynamics helpers and
-is currently at an early stage of development.
+`biotools.mdtools` contains OpenMM-based molecular-dynamics preparation
+helpers. Its `fix_pdb()` workflow uses PDBFixer to replace nonstandard
+residues, remove unwanted heterogens, complete missing atoms, and add
+hydrogens.
 
 ## Requirements
 
@@ -61,7 +63,12 @@ is currently at an early stage of development.
 
 Local BLAST searches additionally require the NCBI BLAST+ executables
 `makeblastdb` and `blastp` to be available on `PATH`. OpenMM is required only
-when using `biotools.mdtools`.
+when using `biotools.mdtools`. Install the molecular-dynamics dependencies
+from conda-forge:
+
+```bash
+conda install -c conda-forge openmm pdbfixer
+```
 
 ## Installation
 
@@ -156,6 +163,26 @@ database = BlastSearch(
 )
 hits = database.search("query.fasta", evalue=1e-10, min_coverage=0.9)
 print(hits)
+```
+
+### Repair a PDB for simulation
+
+```python
+from biotools.mdtools import fix_pdb
+
+fixed_file = fix_pdb(
+    "input.pdb",
+    "fixed.pdb",
+    keep_water=True,
+    ph=7.0,
+)
+```
+
+Missing whole residues are not modeled by default. Enable this explicitly when
+appropriate for the intended simulation:
+
+```python
+fix_pdb("input.pdb", "fixed.pdb", add_missing_residues=True)
 ```
 
 ## Logging

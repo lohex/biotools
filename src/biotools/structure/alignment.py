@@ -1,5 +1,9 @@
 """RMSD calculation and structural superposition helpers."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from Bio.PDB import Superimposer
 
 from ..sequence.alignment import global_alignment_seqs
@@ -10,9 +14,28 @@ from .chains import (
     get_aa_sequence,
 )
 
+if TYPE_CHECKING:
+    from Bio.PDB.Structure import Structure
 
-def get_rmsd(structure1, structure2, ca_only=True):
-    """Compute RMSD between two structures using Biopython superposition."""
+
+def get_rmsd(
+    structure1: Structure,
+    structure2: Structure,
+    ca_only: bool = True,
+) -> float:
+    """Compute RMSD between two structures using Biopython superposition.
+
+    Args:
+        structure1: Fixed reference structure.
+        structure2: Moving structure to compare with the reference.
+        ca_only: Use only C-alpha atoms instead of every atom.
+
+    Returns:
+        Root-mean-square deviation after optimal superposition.
+
+    Raises:
+        PDBException: If the structures contain different atom counts.
+    """
     if ca_only:
         atoms1 = [atom for atom in structure1.get_atoms() if atom.get_id() == "CA"]
         atoms2 = [atom for atom in structure2.get_atoms() if atom.get_id() == "CA"]
@@ -24,8 +47,22 @@ def get_rmsd(structure1, structure2, ca_only=True):
     return superimposer.rms
 
 
-def align_structure(structure1, structure2):
-    """Align one structure onto another using C-alpha atoms."""
+def align_structure(
+    structure1: Structure,
+    structure2: Structure,
+) -> Structure:
+    """Align one structure onto another using C-alpha atoms.
+
+    Args:
+        structure1: Fixed reference structure.
+        structure2: Moving structure to transform.
+
+    Returns:
+        Transformed copy of ``structure2``; both inputs remain unchanged.
+
+    Raises:
+        PDBException: If the structures contain different C-alpha atom counts.
+    """
     atoms1 = [atom for atom in structure1.get_atoms() if atom.get_id() == "CA"]
     atoms2 = [atom for atom in structure2.get_atoms() if atom.get_id() == "CA"]
     superimposer = Superimposer()
@@ -35,8 +72,19 @@ def align_structure(structure1, structure2):
     return target
 
 
-def _identify_homo_aa(gapped_a, gapped_b):
-    """Identify corresponding ungapped residue indices in two alignments."""
+def _identify_homo_aa(
+    gapped_a: str,
+    gapped_b: str,
+) -> tuple[list[int], list[int]]:
+    """Identify corresponding ungapped residue indices in two alignments.
+
+    Args:
+        gapped_a: First aligned sequence containing optional gap characters.
+        gapped_b: Second aligned sequence containing optional gap characters.
+
+    Returns:
+        Parallel lists of corresponding zero-based ungapped residue indices.
+    """
     a_pos = 0
     b_pos = 0
     a_select = []
@@ -54,8 +102,27 @@ def _identify_homo_aa(gapped_a, gapped_b):
     return a_select, b_select
 
 
-def align_homologs(structure1, structure2, chain1, chain2):
-    """Align a complete structure from corresponding residues in two chains."""
+def align_homologs(
+    structure1: Structure,
+    structure2: Structure,
+    chain1: str,
+    chain2: str,
+) -> Structure:
+    """Align a complete structure from corresponding residues in two chains.
+
+    Args:
+        structure1: Fixed reference structure.
+        structure2: Complete moving structure to transform.
+        chain1: Reference chain used to calculate residue correspondence.
+        chain2: Moving chain used to calculate residue correspondence.
+
+    Returns:
+        Transformed copy of the complete ``structure2``.
+
+    Raises:
+        ValueError: If a chain is absent or unsuitable for protein alignment.
+        PDBException: If corresponding atom selections cannot be superimposed.
+    """
     chain_obj_a = _get_chain(structure1, chain1)
     chain_obj_b = _get_chain(structure2, chain2)
     _validate_chain_for_protein_alignment(chain_obj_a)
@@ -80,8 +147,27 @@ def align_homologs(structure1, structure2, chain1, chain2):
     return target
 
 
-def get_alignment(structure1, structure2, chain1=None, chain2=None):
-    """Create a Biopython superimposer for two structures or chains."""
+def get_alignment(
+    structure1: Structure,
+    structure2: Structure,
+    chain1: str | None = None,
+    chain2: str | None = None,
+) -> Superimposer:
+    """Create a fitted Biopython superimposer for structures or chains.
+
+    Args:
+        structure1: Fixed reference structure.
+        structure2: Moving structure.
+        chain1: Optional reference chain selection.
+        chain2: Optional moving chain selection.
+
+    Returns:
+        Superimposer fitted to the selected C-alpha atoms.
+
+    Raises:
+        Exception: If a requested chain does not exist.
+        PDBException: If the selected C-alpha atom counts differ.
+    """
     if chain1 is not None:
         structure1 = extract_chain(structure1, chain1)
     if chain2 is not None:
@@ -93,7 +179,18 @@ def get_alignment(structure1, structure2, chain1=None, chain2=None):
     return superimposer
 
 
-def apply_transformation(superimposer, structure):
-    """Apply a fitted Biopython superposition to a structure in place."""
+def apply_transformation(
+    superimposer: Superimposer,
+    structure: Structure,
+) -> Structure:
+    """Apply a fitted Biopython superposition to a structure in place.
+
+    Args:
+        superimposer: Previously fitted transformation to apply.
+        structure: Structure whose atom coordinates are modified.
+
+    Returns:
+        The same transformed structure object.
+    """
     superimposer.apply(structure.get_atoms())
     return structure

@@ -1,17 +1,31 @@
 """Regression tests for the split structure API and compatibility facades."""
 
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 from Bio.PDB import Atom, Chain, Model, Residue, Structure
 
 from biotools import pdbtools
 from biotools.structure import io as structure_io
-from biotools.structure import align_homologs, rename_chain, reset_index
+from biotools.structure import (
+    align_homologs,
+    get_interaction_residues,
+    get_interaction_residues_full,
+    rename_chain,
+    reset_index,
+)
 
 
-def _residue(number, coordinate, name="ALA"):
+def _residue(
+    number: int,
+    coordinate: Sequence[float],
+    name: str = "ALA",
+) -> Residue.Residue:
+    """Create a minimal amino-acid residue containing one C-alpha atom."""
     residue = Residue.Residue((" ", number, " "), name, " ")
     residue.add(
         Atom.Atom(
@@ -28,7 +42,10 @@ def _residue(number, coordinate, name="ALA"):
     return residue
 
 
-def _structure(chain_coordinates):
+def _structure(
+    chain_coordinates: Mapping[str, Sequence[Sequence[float]]],
+) -> Structure.Structure:
+    """Create a minimal single-model structure from per-chain coordinates."""
     structure = Structure.Structure("test")
     model = Model.Model(0)
     structure.add(model)
@@ -41,11 +58,15 @@ def _structure(chain_coordinates):
 
 
 class StructureRefactorTests(unittest.TestCase):
-    def test_legacy_facade_reexports_new_implementation(self):
+    """Verify refactored structure helpers and their legacy facade."""
+
+    def test_legacy_facade_reexports_new_implementation(self) -> None:
+        """The legacy module should expose the new function objects."""
         self.assertIs(pdbtools.align_homologs, align_homologs)
         self.assertIs(pdbtools.rename_chain, rename_chain)
 
-    def test_chain_swap_is_simultaneous(self):
+    def test_chain_swap_is_simultaneous(self) -> None:
+        """Chain swaps should not collide in Biopython's child index."""
         structure = _structure({"A": [(0, 0, 0)], "B": [(1, 0, 0)]})
         chain_a, chain_b = list(structure[0])
 
@@ -54,7 +75,8 @@ class StructureRefactorTests(unittest.TestCase):
         self.assertIs(structure[0]["B"], chain_a)
         self.assertIs(structure[0]["A"], chain_b)
 
-    def test_reset_index_uses_collision_free_intermediate_ids(self):
+    def test_reset_index_uses_collision_free_intermediate_ids(self) -> None:
+        """Residue renumbering should safely handle an existing target ID."""
         structure = _structure({"A": [(0, 0, 0), (1, 0, 0)]})
         chain = structure[0]["A"]
         residues = list(chain)
@@ -66,7 +88,8 @@ class StructureRefactorTests(unittest.TestCase):
         self.assertIs(chain[(" ", 1, " ")], residues[0])
         self.assertIs(chain[(" ", 2, " ")], residues[1])
 
-    def test_homolog_alignment_returns_complete_target_structure(self):
+    def test_homolog_alignment_returns_complete_target_structure(self) -> None:
+        """Homolog alignment should retain every chain in the target."""
         reference = _structure(
             {"A": [(0, 0, 0), (1, 0, 0), (0, 1, 0)]}
         )
@@ -83,9 +106,38 @@ class StructureRefactorTests(unittest.TestCase):
         self.assertEqual({chain.id for chain in aligned[0]}, {"B", "C"})
         self.assertEqual({chain.id for chain in target[0]}, {"B", "C"})
 
+    def test_neighbor_search_matches_full_interaction_search(self) -> None:
+        """KD-tree and brute-force contact searches should agree."""
+        structure = _structure(
+            {
+                "A": [(0, 0, 0), (10, 0, 0)],
+                "B": [(3, 0, 0), (20, 0, 0)],
+            }
+        )
+
+        neighbor_result = get_interaction_residues(
+            structure,
+            "A",
+            "B",
+            cutoff=5.0,
+        )
+        full_result = get_interaction_residues_full(
+            structure,
+            "A",
+            "B",
+            cutoff=5.0,
+        )
+
+        self.assertEqual(neighbor_result, full_result)
+
     @patch("biotools.structure.io.get_pdb_structure_as_mmcif")
     @patch("biotools.structure.io.get_pdb_structure_as_pdb")
-    def test_pdb_loader_uses_mmcif_as_default_fallback(self, load_pdb, load_mmcif):
+    def test_pdb_loader_uses_mmcif_as_default_fallback(
+        self,
+        load_pdb: MagicMock,
+        load_mmcif: MagicMock,
+    ) -> None:
+        """The default loader should fall back from PDB to mmCIF."""
         expected = object()
         load_pdb.side_effect = OSError("PDB unavailable")
         load_mmcif.return_value = expected
@@ -98,7 +150,12 @@ class StructureRefactorTests(unittest.TestCase):
 
     @patch("biotools.structure.io.get_pdb_structure_as_mmcif")
     @patch("biotools.structure.io.get_pdb_structure_as_pdb")
-    def test_pdb_loader_can_prefer_mmcif(self, load_pdb, load_mmcif):
+    def test_pdb_loader_can_prefer_mmcif(
+        self,
+        load_pdb: MagicMock,
+        load_mmcif: MagicMock,
+    ) -> None:
+        """The optional flag should attempt mmCIF before PDB."""
         expected = object()
         load_mmcif.return_value = expected
 

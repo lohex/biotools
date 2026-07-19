@@ -1,14 +1,41 @@
 """Coordinate, contact, centering, and orientation utilities."""
 
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any, TYPE_CHECKING, TypeAlias
+
 import numpy as np
+from numpy.typing import NDArray
 from Bio.PDB import NeighborSearch
 from Bio.PDB.Polypeptide import is_aa
+from Bio.PDB.vectors import Vector
 
 from .chains import extract_chain
 
+if TYPE_CHECKING:
+    from Bio.PDB.Residue import Residue
+    from Bio.PDB.Structure import Structure
 
-def get_residue_coords(structure, c_alpha: bool = False):
-    """Collect residue-wise coordinate vectors from a structure."""
+ResidueCoordinates: TypeAlias = tuple[int, str, list[Vector]]
+InteractionRecord: TypeAlias = list[int | str | float]
+FloatArray: TypeAlias = NDArray[np.floating[Any]]
+
+
+def get_residue_coords(
+    structure: Structure,
+    c_alpha: bool = False,
+) -> list[ResidueCoordinates]:
+    """Collect residue-wise coordinate vectors from a structure.
+
+    Args:
+        structure: Structure containing residues and atoms.
+        c_alpha: Include only C-alpha atoms for each residue.
+
+    Returns:
+        Tuples of residue number, residue name, and coordinate vectors for each
+        amino-acid residue.
+    """
     centers = []
     for residue in structure.get_residues():
         if not is_aa(residue):
@@ -26,8 +53,22 @@ def get_residue_coords(structure, c_alpha: bool = False):
     return centers
 
 
-def get_min_dist(atom_list_a, atom_list_b, cutoff=30.0):
-    """Compute the minimal Euclidean distance between two atom lists."""
+def get_min_dist(
+    atom_list_a: Iterable[Vector],
+    atom_list_b: Iterable[Vector],
+    cutoff: float = 30.0,
+) -> float:
+    """Compute the minimal Euclidean distance between two coordinate lists.
+
+    Args:
+        atom_list_a: Coordinate vectors in the first group.
+        atom_list_b: Coordinate vectors in the second group.
+        cutoff: Retained for API compatibility; it does not restrict the full
+            distance calculation.
+
+    Returns:
+        Minimum pairwise distance, or positive infinity if a group is empty.
+    """
     min_dist = np.inf
     for atom_a in atom_list_a:
         for atom_b in atom_list_b:
@@ -39,11 +80,29 @@ def get_min_dist(atom_list_a, atom_list_b, cutoff=30.0):
     return float(min_dist)
 
 
-def get_interaction_residues_full(struc, chain_a, chain_b, cutoff=5.0):
+def get_interaction_residues_full(
+    struc: Structure,
+    chain_a: str,
+    chain_b: str,
+    cutoff: float = 5.0,
+) -> list[InteractionRecord]:
     """Find interacting residues using a full pairwise distance search.
 
     This is the original brute-force implementation. Prefer
     :func:`get_interaction_residues` for larger structures.
+
+    Args:
+        struc: Structure containing both requested chains.
+        chain_a: ID of the first interacting chain.
+        chain_b: ID of the second interacting chain.
+        cutoff: Maximum atom-to-atom contact distance in angstroms.
+
+    Returns:
+        Contact records containing residue numbers, residue names, and minimum
+        atom-to-atom distances.
+
+    Raises:
+        Exception: If either requested chain does not exist.
     """
     atoms_a = get_residue_coords(extract_chain(struc, chain_a))
     atoms_b = get_residue_coords(extract_chain(struc, chain_b))
@@ -56,12 +115,30 @@ def get_interaction_residues_full(struc, chain_a, chain_b, cutoff=5.0):
     return interactions
 
 
-def get_interaction_residues(struc, chain_a, chain_b, cutoff=5.0):
+def get_interaction_residues(
+    struc: Structure,
+    chain_a: str,
+    chain_b: str,
+    cutoff: float = 5.0,
+) -> list[InteractionRecord]:
     """Find interacting residues using a KD-tree neighbor search.
 
     All amino-acid residues from chains with the requested IDs are considered.
     For each residue pair with at least one atom pair inside ``cutoff``, the
     smallest atom-to-atom distance is returned.
+
+    Args:
+        struc: Structure containing both requested chains.
+        chain_a: ID of the first interacting chain.
+        chain_b: ID of the second interacting chain.
+        cutoff: Maximum atom-to-atom contact distance in angstroms.
+
+    Returns:
+        Contact records containing residue numbers, residue names, and minimum
+        atom-to-atom distances.
+
+    Raises:
+        ValueError: If either requested chain does not exist.
     """
     chains_a = [chain for chain in struc.get_chains() if chain.id == chain_a]
     chains_b = [chain for chain in struc.get_chains() if chain.id == chain_b]
@@ -88,7 +165,7 @@ def get_interaction_residues(struc, chain_a, chain_b, cutoff=5.0):
 
     atoms_b = [atom for residue in residues_b for atom in residue.get_atoms()]
     neighbor_search = NeighborSearch(atoms_b)
-    min_distances = {}
+    min_distances: dict[tuple[Residue, Residue], float] = {}
 
     for residue_a in residues_a:
         for atom_a in residue_a.get_atoms():
@@ -117,8 +194,15 @@ def get_interaction_residues(struc, chain_a, chain_b, cutoff=5.0):
     ]
 
 
-def move_to_center(structure):
-    """Translate a structure copy so its center of mass is at the origin."""
+def move_to_center(structure: Structure) -> Structure:
+    """Translate a structure copy so its center of mass is at the origin.
+
+    Args:
+        structure: Structure to center without modifying the input.
+
+    Returns:
+        Centered copy of ``structure``.
+    """
     center = structure.center_of_mass()
     centered = structure.copy()
     for residue in centered.get_residues():
@@ -126,8 +210,27 @@ def move_to_center(structure):
     return centered
 
 
-def superimpose_PCA(structure, apply_rot=True, apply_shift=True):
-    """Reorient a structure along its principal component axes."""
+def superimpose_PCA(
+    structure: Structure,
+    apply_rot: bool = True,
+    apply_shift: bool = True,
+) -> tuple[Structure, FloatArray, FloatArray]:
+    """Reorient a structure along its principal component axes.
+
+    Principal components are calculated from C-alpha coordinates.
+
+    Args:
+        structure: Structure to copy and transform.
+        apply_rot: Apply the principal-axis rotation to the copy.
+        apply_shift: Center the C-alpha coordinates before rotation.
+
+    Returns:
+        Transformed structure copy, calculated translation vector, and
+        principal-axis rotation matrix.
+
+    Raises:
+        ValueError: If no usable C-alpha coordinates are present.
+    """
     coords = get_residue_coords(structure, c_alpha=True)
     coordinate_matrix = np.array([vector.get_array() for _, _, (vector,) in coords])
     shift = -coordinate_matrix.mean(0)
