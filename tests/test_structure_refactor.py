@@ -148,6 +148,32 @@ class StructureRefactorTests(unittest.TestCase):
         load_pdb.assert_called_once_with("1abc", "data")
         load_mmcif.assert_called_once_with("1abc", "data")
 
+    @patch("biotools.structure.io.MMCIFParser.get_structure")
+    @patch("Bio.PDB.PDBList.PDBList.retrieve_pdb_file")
+    def test_pdb_loader_falls_back_when_download_returns_none(
+        self,
+        retrieve_file: MagicMock,
+        parse_mmcif: MagicMock,
+    ) -> None:
+        """A missing legacy download should trigger the mmCIF fallback."""
+        expected = object()
+        retrieve_file.side_effect = [None, "downloaded.cif"]
+        parse_mmcif.return_value = expected
+
+        result = structure_io.get_pdb_structure("9XYZ", target_folder="data")
+
+        self.assertIs(result, expected)
+        self.assertEqual(retrieve_file.call_count, 2)
+        self.assertEqual(
+            retrieve_file.call_args_list[0].kwargs["file_format"],
+            "pdb",
+        )
+        self.assertEqual(
+            retrieve_file.call_args_list[1].kwargs["file_format"],
+            "mmCif",
+        )
+        parse_mmcif.assert_called_once_with("9xyz", "downloaded.cif")
+
     @patch("biotools.structure.io.get_pdb_structure_as_mmcif")
     @patch("biotools.structure.io.get_pdb_structure_as_pdb")
     def test_pdb_loader_can_prefer_mmcif(

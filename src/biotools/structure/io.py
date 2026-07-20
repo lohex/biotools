@@ -87,6 +87,7 @@ def get_pdb_structure_as_pdb(
         Parsed Biopython structure.
 
     Raises:
+        FileNotFoundError: If the PDB archive provides no legacy PDB file.
         OSError: If the file cannot be downloaded or read.
         ValueError: If the identifier or downloaded structure is invalid.
         PDBConstructionException: If Biopython cannot construct the structure.
@@ -100,6 +101,10 @@ def get_pdb_structure_as_pdb(
         pdir=target_folder,
         file_format="pdb",
     )
+    if not pdb_file:
+        raise FileNotFoundError(
+            f"PDB entry {pdb_id!r} is not available in legacy PDB format"
+        )
     return PDBParser(QUIET=True).get_structure(pdb_id, pdb_file)
 
 
@@ -117,6 +122,7 @@ def get_pdb_structure_as_mmcif(
         Parsed Biopython structure.
 
     Raises:
+        FileNotFoundError: If the PDB archive provides no mmCIF file.
         OSError: If the file cannot be downloaded or read.
         ValueError: If the identifier or downloaded structure is invalid.
         PDBConstructionException: If Biopython cannot construct the structure.
@@ -130,6 +136,10 @@ def get_pdb_structure_as_mmcif(
         pdir=target_folder,
         file_format="mmCif",
     )
+    if not cif_file:
+        raise FileNotFoundError(
+            f"PDB entry {pdb_id!r} is not available in mmCIF format"
+        )
     return MMCIFParser(QUIET=True).get_structure(pdb_id, cif_file)
 
 
