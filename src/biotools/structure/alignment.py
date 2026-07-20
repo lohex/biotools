@@ -5,16 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from Bio.PDB import Superimposer
+from Bio.PDB.Polypeptide import is_aa
 
 from ..sequence.alignment import global_alignment_seqs
-from .chains import (
-    _get_chain,
-    _validate_chain_for_protein_alignment,
-    extract_chain,
-    get_aa_sequence,
-)
+from .chains import _get_chain, extract_chain
+from .io import map_three_to_one
 
 if TYPE_CHECKING:
+    from Bio.PDB.Atom import Atom
+    from Bio.PDB.Chain import Chain
     from Bio.PDB.Structure import Structure
 
 
@@ -102,6 +101,40 @@ def _identify_homo_aa(
     return a_select, b_select
 
 
+def _get_ca_alignment_data(chain: Chain) -> tuple[str, list[Atom]]:
+    """Build a sequence and matching C-alpha atom list for a chain.
+
+    Amino-acid residues without a C-alpha atom are excluded from both outputs,
+    ensuring that every sequence position maps to exactly one atom.
+
+    Args:
+        chain: Protein chain used for coordinate-based superposition.
+
+    Returns:
+        One-letter amino-acid sequence and parallel C-alpha atom list.
+
+    Raises:
+        ValueError: If the chain contains no amino-acid residues with C-alpha
+            atoms.
+    """
+    residues = [
+        residue
+        for residue in chain.get_residues()
+        if is_aa(residue) and "CA" in residue
+    ]
+    if not residues:
+        raise ValueError(
+            f"Chain {chain.id!r} has no amino-acid residues with CA atoms"
+        )
+
+    sequence = "".join(
+        map_three_to_one(residue.get_resname())
+        for residue in residues
+    )
+    atoms = [residue["CA"] for residue in residues]
+    return sequence, atoms
+
+
 def align_homologs(
     structure1: Structure,
     structure2: Structure,
@@ -120,25 +153,22 @@ def align_homologs(
         Transformed copy of the complete ``structure2``.
 
     Raises:
-        ValueError: If a chain is absent or unsuitable for protein alignment.
+        ValueError: If a chain is absent or contains no amino-acid residues
+            with C-alpha atoms.
         PDBException: If corresponding atom selections cannot be superimposed.
     """
     chain_obj_a = _get_chain(structure1, chain1)
     chain_obj_b = _get_chain(structure2, chain2)
-    _validate_chain_for_protein_alignment(chain_obj_a)
-    _validate_chain_for_protein_alignment(chain_obj_b)
+    sequence_a, atoms1 = _get_ca_alignment_data(chain_obj_a)
+    sequence_b, atoms2 = _get_ca_alignment_data(chain_obj_b)
 
-    seqs_a = get_aa_sequence(structure1)
-    seqs_b = get_aa_sequence(structure2)
     gapped_seq_a, gapped_seq_b = global_alignment_seqs(
-        seqs_a[chain1],
-        seqs_b[chain2],
+        sequence_a,
+        sequence_b,
     )
     selected_a, selected_b = _identify_homo_aa(gapped_seq_a, gapped_seq_b)
-    atoms1 = [atom for atom in chain_obj_a.get_atoms() if atom.get_id() == "CA"]
-    atoms2 = [atom for atom in chain_obj_b.get_atoms() if atom.get_id() == "CA"]
-    atoms1_aligned = [atom for index, atom in enumerate(atoms1) if index in selected_a]
-    atoms2_aligned = [atom for index, atom in enumerate(atoms2) if index in selected_b]
+    atoms1_aligned = [atoms1[index] for index in selected_a]
+    atoms2_aligned = [atoms2[index] for index in selected_b]
 
     superimposer = Superimposer()
     superimposer.set_atoms(atoms1_aligned, atoms2_aligned)

@@ -182,6 +182,10 @@ def clip_chain(
 ) -> Structure:
     """Trim residues that align to gaps in target chain sequences.
 
+    The operation is purely sequence based. All residues recognized as amino
+    acids participate in both the alignment and residue-index mapping,
+    regardless of which atoms are present.
+
     Args:
         structure: Structure to modify in place.
         chain_seqs: Target amino-acid sequence for each chain to process.
@@ -191,16 +195,29 @@ def clip_chain(
         The same modified structure object.
 
     Raises:
-        ValueError: If a selected chain contains non-protein residues, lacks a
-            C-alpha atom, or cannot be mapped cleanly to its alignment.
+        ValueError: If a selected chain has no amino-acid residues or cannot be
+            mapped cleanly to its alignment.
     """
-    seqs = get_aa_sequence(structure, show_gaps=False)
     for chain in structure.get_chains():
         if chain.id not in chain_seqs:
             continue
-        protein_residues = _validate_chain_for_protein_alignment(chain)
+
+        protein_residues = [
+            residue
+            for residue in chain.get_residues()
+            if is_aa(residue)
+        ]
+        if not protein_residues:
+            raise ValueError(
+                f"Chain {chain.id!r} has no amino-acid residues"
+            )
+
+        pdb_sequence = "".join(
+            map_three_to_one(residue.get_resname())
+            for residue in protein_residues
+        )
         gapped_pdb_seq, gapped_seq = global_alignment_seqs(
-            seqs[chain.id],
+            pdb_sequence,
             chain_seqs[chain.id],
             gap_penalty=(-10, -1),
         )

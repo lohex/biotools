@@ -13,6 +13,7 @@ from biotools import pdbtools
 from biotools.structure import io as structure_io
 from biotools.structure import (
     align_homologs,
+    clip_chain,
     get_interaction_residues,
     get_interaction_residues_full,
     rename_chain,
@@ -88,6 +89,19 @@ class StructureRefactorTests(unittest.TestCase):
         self.assertIs(chain[(" ", 1, " ")], residues[0])
         self.assertIs(chain[(" ", 2, " ")], residues[1])
 
+    def test_clip_chain_accepts_amino_acids_without_ca_atoms(self) -> None:
+        """Sequence-based clipping should not require C-alpha atoms."""
+        structure = _structure({"A": [(0, 0, 0), (1, 0, 0)]})
+        chain = structure[0]["A"]
+        incomplete_residue = Residue.Residue((" ", 3, " "), "ALA", " ")
+        chain.add(incomplete_residue)
+
+        result = clip_chain(structure, {"A": "AAA"})
+
+        self.assertIs(result, structure)
+        self.assertIs(chain[incomplete_residue.id], incomplete_residue)
+        self.assertEqual(len(list(chain)), 3)
+
     def test_homolog_alignment_returns_complete_target_structure(self) -> None:
         """Homolog alignment should retain every chain in the target."""
         reference = _structure(
@@ -105,6 +119,24 @@ class StructureRefactorTests(unittest.TestCase):
         self.assertIsNot(aligned, target)
         self.assertEqual({chain.id for chain in aligned[0]}, {"B", "C"})
         self.assertEqual({chain.id for chain in target[0]}, {"B", "C"})
+
+    def test_homolog_alignment_ignores_residues_without_ca_atoms(self) -> None:
+        """Incomplete residues should not invalidate homolog superposition."""
+        reference = _structure(
+            {"A": [(0, 0, 0), (1, 0, 0), (0, 1, 0)]}
+        )
+        target = _structure(
+            {"B": [(10, 0, 0), (11, 0, 0), (10, 1, 0)]}
+        )
+        incomplete_residue = Residue.Residue((" ", 4, " "), "ALA", " ")
+        target[0]["B"].add(incomplete_residue)
+
+        aligned = align_homologs(reference, target, "A", "B")
+
+        self.assertEqual(
+            aligned[0]["B"][incomplete_residue.id].get_resname(),
+            incomplete_residue.get_resname(),
+        )
 
     def test_neighbor_search_matches_full_interaction_search(self) -> None:
         """KD-tree and brute-force contact searches should agree."""
