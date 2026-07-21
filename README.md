@@ -50,7 +50,8 @@ backward-compatible import facades.
 `biotools.mdtools` contains OpenMM-based molecular-dynamics preparation
 helpers. Its `fix_pdb()` workflow uses PDBFixer to replace nonstandard
 residues, remove unwanted heterogens, complete missing atoms, and add
-hydrogens.
+hydrogens. `model_solvent()` adds pH-dependent hydrogens and explicit solvent;
+`minimize()` performs force-field energy minimization.
 
 ## Requirements
 
@@ -183,6 +184,26 @@ appropriate for the intended simulation:
 
 ```python
 fix_pdb("input.pdb", "fixed.pdb", add_missing_residues=True)
+```
+
+### Solvate and minimize a model
+
+```python
+from biotools.mdtools import minimize, model_solvent
+
+model_solvent(
+    "fixed.pdb",
+    "solvated.pdb",
+    ph=7.4,
+    padding_nm=1.0,
+    ionic_strength_molar=0.15,
+)
+
+minimize(
+    "solvated.pdb",
+    "minimized.pdb",
+    max_iterations=1000,
+)
 ```
 
 ## Logging
