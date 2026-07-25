@@ -209,18 +209,20 @@ minimize(
 ## Logging
 
 The library uses Python's standard `logging` package and does not configure
-global handlers. Applications can opt into informational output themselves:
+global handlers. Progress logging is enabled by default (`verbose=True`).
+Pass `verbose=False` to suppress a function's messages. Applications must
+also enable informational logging to display them:
 
 ```python
 import logging
+from biotools.mdtools import minimize
 
 logging.basicConfig(level=logging.INFO)
-```
 
-For more detailed diagnostics, set the level of an individual module logger:
-
-```python
-logging.getLogger("biotools.structure").setLevel(logging.DEBUG)
+minimize(
+    "solvated.pdb",
+    "minimized.pdb",
+)
 ```
 
 ## Development status

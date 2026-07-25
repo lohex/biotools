@@ -90,12 +90,14 @@ def _validate_chain_for_protein_alignment(chain: Chain) -> list[Residue]:
 def extract_chain(
     structure: Structure,
     chain_id: str | Collection[str],
+    verbose: bool = True,
 ) -> Structure:
     """Return a copy of a structure containing only selected chains.
 
     Args:
         structure: Source structure, which remains unchanged.
         chain_id: One chain ID or a collection of IDs to retain.
+        verbose: Log the removed chain IDs for each model.
 
     Returns:
         Structure copy containing only the requested chains.
@@ -109,11 +111,12 @@ def extract_chain(
     chains_to_keep = []
     for model in selected:
         chains_to_remove = [chain for chain in model if chain.id not in chain_id]
-        logger.debug(
-            "Removing chains %s from model %s",
-            [chain.id for chain in chains_to_remove],
-            model.id,
-        )
+        if verbose:
+            logger.info(
+                "Removing chains %s from model %s",
+                [chain.id for chain in chains_to_remove],
+                model.id,
+            )
         for chain in chains_to_remove:
             model.detach_child(chain.id)
         chains_to_keep += [chain for chain in model if chain.id in chain_id]
@@ -178,7 +181,7 @@ def get_aa_sequence(
 def clip_chain(
     structure: Structure,
     chain_seqs: Mapping[str, str],
-    verbose: bool = False,
+    verbose: bool = True,
 ) -> Structure:
     """Trim residues that align to gaps in target chain sequences.
 

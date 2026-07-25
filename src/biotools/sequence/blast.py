@@ -25,6 +25,8 @@ class BlastSearch:
         input_fasta: str | PathLike[str],
         db_name: str,
         description: str | None = None,
+        *,
+        verbose: bool = True,
     ) -> None:
         """Initialize a BLAST database if its index files are missing.
 
@@ -32,6 +34,7 @@ class BlastSearch:
             input_fasta: Protein FASTA file used to build the database.
             db_name: Basename for generated BLAST index files.
             description: Optional database title; defaults to ``db_name``.
+            verbose: Log database creation or reuse.
 
         Raises:
             FileNotFoundError: If ``makeblastdb`` is not installed.
@@ -43,7 +46,10 @@ class BlastSearch:
         self.index_file: Path = Path(input_fasta).parent / db_name
         final_index = Path(str(self.index_file) + ".pdb")
         if not final_index.exists():
-            logger.info("Creating BLAST protein database at %s", self.index_file)
+            if verbose:
+                logger.info(
+                    "Creating BLAST protein database at %s", self.index_file
+                )
             subprocess.run(
                 [
                     "makeblastdb",
@@ -60,7 +66,10 @@ class BlastSearch:
                 check=True,
             )
         else:
-            logger.debug("Using existing BLAST database at %s", self.index_file)
+            if verbose:
+                logger.info(
+                    "Using existing BLAST database at %s", self.index_file
+                )
 
     def search(
         self,
@@ -68,6 +77,8 @@ class BlastSearch:
         evalue: float = 1e-10,
         min_coverage: float = 0.9,
         max_targets: int = 1000,
+        *,
+        verbose: bool = True,
     ) -> pd.DataFrame:
         """Search the local BLAST database with protein query sequences.
 
@@ -76,6 +87,7 @@ class BlastSearch:
             evalue: Maximum E-value accepted by BLAST.
             min_coverage: Minimum query coverage as a fraction or percentage.
             max_targets: Maximum number of target sequences reported per query.
+            verbose: Log search progress and the number of filtered hits.
 
         Returns:
             Filtered hits with PDB ID, chain ID, allele, E-value, and identity.
@@ -85,11 +97,12 @@ class BlastSearch:
             subprocess.CalledProcessError: If the BLAST search fails.
         """
         blast_coverage = min_coverage * 100 if min_coverage <= 1 else min_coverage
-        logger.info(
-            "Searching BLAST database %s with query %s",
-            self.index_file,
-            query_fasta,
-        )
+        if verbose:
+            logger.info(
+                "Searching BLAST database %s with query %s",
+                self.index_file,
+                query_fasta,
+            )
         with tempfile.NamedTemporaryFile() as temp:
             out_str = "6 qseqid sseqid pident length qcovs evalue bitscore"
             subprocess.run(
@@ -112,7 +125,10 @@ class BlastSearch:
                 check=True,
             )
             results = self._convert_output_to_df(temp.name)
-            logger.info("BLAST search returned %d filtered hits", len(results))
+            if verbose:
+                logger.info(
+                    "BLAST search returned %d filtered hits", len(results)
+                )
             return results
 
     def _convert_output_to_df(

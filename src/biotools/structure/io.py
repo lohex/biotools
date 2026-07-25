@@ -76,12 +76,15 @@ def _resolve_pdb_chain_map(
 def get_pdb_structure_as_pdb(
     pdb_id: str,
     target_folder: str | PathLike[str] = ".",
+    *,
+    verbose: bool = True,
 ) -> Structure:
     """Fetch and parse a structure in legacy PDB/``.ent`` format.
 
     Args:
         pdb_id: Four-character Protein Data Bank identifier.
         target_folder: Directory in which the downloaded file is stored.
+        verbose: Log download progress.
 
     Returns:
         Parsed Biopython structure.
@@ -95,7 +98,8 @@ def get_pdb_structure_as_pdb(
     from Bio.PDB import PDBList
 
     pdb_id = pdb_id.lower()
-    logger.debug("Retrieving PDB structure %s in PDB format", pdb_id)
+    if verbose:
+        logger.info("Retrieving PDB structure %s in PDB format", pdb_id)
     pdb_file = PDBList().retrieve_pdb_file(
         pdb_id,
         pdir=target_folder,
@@ -111,12 +115,15 @@ def get_pdb_structure_as_pdb(
 def get_pdb_structure_as_mmcif(
     pdb_id: str,
     target_folder: str | PathLike[str] = ".",
+    *,
+    verbose: bool = True,
 ) -> Structure:
     """Fetch and parse a structure in mmCIF format.
 
     Args:
         pdb_id: Four-character Protein Data Bank identifier.
         target_folder: Directory in which the downloaded file is stored.
+        verbose: Log download progress.
 
     Returns:
         Parsed Biopython structure.
@@ -130,7 +137,8 @@ def get_pdb_structure_as_mmcif(
     from Bio.PDB import PDBList
 
     pdb_id = pdb_id.lower()
-    logger.debug("Retrieving PDB structure %s in mmCIF format", pdb_id)
+    if verbose:
+        logger.info("Retrieving PDB structure %s in mmCIF format", pdb_id)
     cif_file = PDBList().retrieve_pdb_file(
         pdb_id,
         pdir=target_folder,
@@ -147,6 +155,8 @@ def get_pdb_structure(
     pdb_id: str,
     target_folder: str | PathLike[str] = ".",
     prefer_mmcif: bool = False,
+    *,
+    verbose: bool = True,
 ) -> Structure:
     """Fetch a structure with an automatic format fallback.
 
@@ -158,6 +168,7 @@ def get_pdb_structure(
         pdb_id: Four-character PDB identifier.
         target_folder: Directory used to store downloaded structure files.
         prefer_mmcif: Attempt mmCIF before legacy PDB/``.ent`` format.
+        verbose: Log download attempts.
 
     Returns:
         Loaded Biopython structure object.
@@ -175,18 +186,23 @@ def get_pdb_structure(
         fallback_format, fallback_loader = ("mmCIF", get_pdb_structure_as_mmcif)
 
     try:
+        if verbose:
+            return first_loader(pdb_id, target_folder, verbose=True)
         return first_loader(pdb_id, target_folder)
     except (OSError, FileNotFoundError, ValueError, PDBConstructionException) as exc:
         first_error = exc
-        logger.warning(
-            "Could not load structure %s in %s format; trying %s: %s",
-            pdb_id,
-            first_format,
-            fallback_format,
-            exc,
-        )
+        if verbose:
+            logger.warning(
+                "Could not load structure %s in %s format; trying %s: %s",
+                pdb_id,
+                first_format,
+                fallback_format,
+                exc,
+            )
 
     try:
+        if verbose:
+            return fallback_loader(pdb_id, target_folder, verbose=True)
         return fallback_loader(pdb_id, target_folder)
     except (OSError, FileNotFoundError, ValueError, PDBConstructionException) as exc:
         raise RuntimeError(
@@ -200,6 +216,8 @@ def convert_cif_to_pdb(
     pdb_file: str | PathLike[str],
     chain_map: Mapping[str, str] | None = None,
     return_chain_map: bool = False,
+    *,
+    verbose: bool = True,
 ) -> Structure | tuple[Structure, dict[str, str]]:
     """Convert an mmCIF structure file to PDB format.
 
@@ -208,6 +226,7 @@ def convert_cif_to_pdb(
         pdb_file: Destination PDB file.
         chain_map: Optional explicit one-character chain ID mapping.
         return_chain_map: Return the resolved mapping along with the structure.
+        verbose: Log the converted paths and resolved chain-ID mapping.
 
     Returns:
         Converted structure, optionally paired with the resolved chain map.
@@ -229,8 +248,9 @@ def convert_cif_to_pdb(
     io = PDBIO()
     io.set_structure(structure)
     io.save(pdb_file)
-    logger.info("Converted mmCIF file %s to PDB file %s", cif_file, pdb_file)
-    logger.debug("Chain ID mapping used for PDB export: %s", resolved_map)
+    if verbose:
+        logger.info("Converted mmCIF file %s to PDB file %s", cif_file, pdb_file)
+        logger.info("Chain ID mapping used for PDB export: %s", resolved_map)
     if return_chain_map:
         return structure, resolved_map
     return structure
@@ -251,19 +271,23 @@ def load_pdb_from_file(pdb_file: str | PathLike[str]) -> Structure:
 def save_structure_to_file(
     structure: Structure,
     filename: str | PathLike[str],
+    *,
+    verbose: bool = True,
 ) -> None:
     """Write a structure to a PDB file.
 
     Args:
         structure: Biopython structure to serialize.
         filename: Destination PDB path.
+        verbose: Log the output path.
     """
     from Bio.PDB import PDBIO
 
     io = PDBIO()
     io.set_structure(structure)
     io.save(filename)
-    logger.info("Saved structure to %s", filename)
+    if verbose:
+        logger.info("Saved structure to %s", filename)
 
 
 def map_three_to_one(res: str | None) -> str:

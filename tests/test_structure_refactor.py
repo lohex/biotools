@@ -177,8 +177,8 @@ class StructureRefactorTests(unittest.TestCase):
         result = structure_io.get_pdb_structure("1ABC", target_folder="data")
 
         self.assertIs(result, expected)
-        load_pdb.assert_called_once_with("1abc", "data")
-        load_mmcif.assert_called_once_with("1abc", "data")
+        load_pdb.assert_called_once_with("1abc", "data", verbose=True)
+        load_mmcif.assert_called_once_with("1abc", "data", verbose=True)
 
     @patch("biotools.structure.io.MMCIFParser.get_structure")
     @patch("Bio.PDB.PDBList.PDBList.retrieve_pdb_file")
@@ -220,7 +220,7 @@ class StructureRefactorTests(unittest.TestCase):
         result = structure_io.get_pdb_structure("1ABC", prefer_mmcif=True)
 
         self.assertIs(result, expected)
-        load_mmcif.assert_called_once_with("1abc", ".")
+        load_mmcif.assert_called_once_with("1abc", ".", verbose=True)
         load_pdb.assert_not_called()
 
 

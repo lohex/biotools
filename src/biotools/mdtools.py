@@ -41,6 +41,7 @@ def model_solvent(
         "amber14/tip3pfb.xml",
     ),
     keep_ids: bool = False,
+    verbose: bool = True,
 ) -> Path:
     """Add pH-dependent hydrogens and explicit solvent to a PDB model.
 
@@ -61,6 +62,7 @@ def model_solvent(
         forcefield_files: OpenMM force-field XML files for solute and solvent.
         keep_ids: Preserve existing chain and residue IDs when writing. Newly
             added solvent makes generated IDs safer by default.
+        verbose: Log progress messages at informational level.
 
     Returns:
         Path to the modeled and solvated PDB file.
@@ -80,7 +82,8 @@ def model_solvent(
     if ionic_strength_molar < 0:
         raise ValueError("ionic_strength_molar must not be negative")
 
-    logger.info("Adding hydrogens and solvent to %s", input_path)
+    if verbose:
+        logger.info("Adding hydrogens and solvent to %s", input_path)
     pdb = PDBFile(str(input_path))
     forcefield = ForceField(*forcefield_files)
     modeller = Modeller(pdb.topology, pdb.positions)
@@ -103,7 +106,8 @@ def model_solvent(
             keepIds=keep_ids,
         )
 
-    logger.info("Saved modeled PDB file to %s", output_path)
+    if verbose:
+        logger.info("Saved modeled PDB file to %s", output_path)
     return output_path
 
 
@@ -119,6 +123,7 @@ def minimize(
     max_iterations: int = 1000,
     nonbonded_cutoff_nm: float = 1.0,
     keep_ids: bool = False,
+    verbose: bool = True,
 ) -> Path:
     """Energy-minimize a PDB structure with an OpenMM force field.
 
@@ -133,6 +138,7 @@ def minimize(
         max_iterations: Maximum minimization iterations; zero means unlimited.
         nonbonded_cutoff_nm: Nonbonded cutoff for periodic systems in nanometers.
         keep_ids: Preserve valid chain and residue IDs in the output PDB.
+        verbose: Log progress messages at informational level.
 
     Returns:
         Path to the minimized PDB file.
@@ -154,7 +160,8 @@ def minimize(
     if nonbonded_cutoff_nm <= 0:
         raise ValueError("nonbonded_cutoff_nm must be greater than zero")
 
-    logger.info("Energy-minimizing PDB file %s", input_path)
+    if verbose:
+        logger.info("Energy-minimizing PDB file %s", input_path)
     pdb = PDBFile(str(input_path))
     forcefield = ForceField(*forcefield_files)
     system_options = {"constraints": HBonds}
@@ -182,7 +189,8 @@ def minimize(
             keepIds=keep_ids,
         )
 
-    logger.info("Saved minimized PDB file to %s", output_path)
+    if verbose:
+        logger.info("Saved minimized PDB file to %s", output_path)
     return output_path
 
 
@@ -198,6 +206,7 @@ def fix_pdb(
     add_hydrogens: bool = True,
     ph: float = 7.0,
     keep_ids: bool = True,
+    verbose: bool = True,
 ) -> Path:
     """Repair a PDB file with PDBFixer and write it through OpenMM.
 
@@ -221,6 +230,7 @@ def fix_pdb(
         add_hydrogens: Add hydrogens appropriate for ``ph``.
         ph: pH used to select protonation states when adding hydrogens.
         keep_ids: Preserve valid chain and residue IDs in the written PDB.
+        verbose: Log progress messages at informational level.
 
     Returns:
         Path to the repaired PDB file.
@@ -241,7 +251,8 @@ def fix_pdb(
             "add_missing_residues=True requires add_missing_atoms=True"
         )
 
-    logger.info("Repairing PDB file %s", input_path)
+    if verbose:
+        logger.info("Repairing PDB file %s", input_path)
     fixer = PDBFixer(filename=str(input_path))
     fixer.findMissingResidues()
     if not add_missing_residues:
@@ -269,5 +280,6 @@ def fix_pdb(
             keepIds=keep_ids,
         )
 
-    logger.info("Saved repaired PDB file to %s", output_path)
+    if verbose:
+        logger.info("Saved repaired PDB file to %s", output_path)
     return output_path

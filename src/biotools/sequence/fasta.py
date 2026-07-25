@@ -12,25 +12,34 @@ logger = logging.getLogger(__name__)
 def dict_to_fasta(
     seq_dict: Mapping[str, str],
     save_file: str | PathLike[str],
+    *,
+    verbose: bool = True,
 ) -> None:
     """Write a mapping of identifiers to sequences as a FASTA file.
 
     Args:
         seq_dict: Mapping from FASTA headers to sequence strings.
         save_file: Destination FASTA path.
+        verbose: Log the number of written sequences.
     """
     with open(save_file, "w") as fp:
         for name, seq in seq_dict.items():
             fp.write(f">{name}\n")
             fp.write(f"{seq}\n")
-    logger.info("Wrote %d sequences to %s", len(seq_dict), save_file)
+    if verbose:
+        logger.info("Wrote %d sequences to %s", len(seq_dict), save_file)
 
 
-def fasta_to_dict(load_file: str | PathLike[str]) -> dict[str, str]:
+def fasta_to_dict(
+    load_file: str | PathLike[str],
+    *,
+    verbose: bool = True,
+) -> dict[str, str]:
     """Parse a FASTA file into a dictionary keyed by record identifier.
 
     Args:
         load_file: FASTA file to read.
+        verbose: Log the number of loaded sequences.
 
     Returns:
         Mapping from complete header text, without ``">"``, to sequence.
@@ -56,5 +65,6 @@ def fasta_to_dict(load_file: str | PathLike[str]) -> dict[str, str]:
     if last_name is not None:
         seq_dict[last_name] = current_seq
 
-    logger.debug("Loaded %d sequences from %s", len(seq_dict), load_file)
+    if verbose:
+        logger.info("Loaded %d sequences from %s", len(seq_dict), load_file)
     return seq_dict
