@@ -186,9 +186,7 @@ def get_pdb_structure(
         fallback_format, fallback_loader = ("mmCIF", get_pdb_structure_as_mmcif)
 
     try:
-        if verbose:
-            return first_loader(pdb_id, target_folder, verbose=True)
-        return first_loader(pdb_id, target_folder)
+        return first_loader(pdb_id, target_folder, verbose=verbose)
     except (OSError, FileNotFoundError, ValueError, PDBConstructionException) as exc:
         first_error = exc
         if verbose:
@@ -201,9 +199,7 @@ def get_pdb_structure(
             )
 
     try:
-        if verbose:
-            return fallback_loader(pdb_id, target_folder, verbose=True)
-        return fallback_loader(pdb_id, target_folder)
+        return fallback_loader(pdb_id, target_folder, verbose=verbose)
     except (OSError, FileNotFoundError, ValueError, PDBConstructionException) as exc:
         raise RuntimeError(
             f"Failed to load structure {pdb_id!r} as {first_format} "

@@ -223,6 +223,24 @@ class StructureRefactorTests(unittest.TestCase):
         load_mmcif.assert_called_once_with("1abc", ".", verbose=True)
         load_pdb.assert_not_called()
 
+    @patch("biotools.structure.io.get_pdb_structure_as_mmcif")
+    @patch("biotools.structure.io.get_pdb_structure_as_pdb")
+    def test_pdb_loader_propagates_disabled_verbose_to_fallback(
+        self,
+        load_pdb: MagicMock,
+        load_mmcif: MagicMock,
+    ) -> None:
+        """Both format loaders should receive the caller's verbose value."""
+        expected = object()
+        load_pdb.side_effect = OSError("PDB unavailable")
+        load_mmcif.return_value = expected
+
+        result = structure_io.get_pdb_structure("1ABC", verbose=False)
+
+        self.assertIs(result, expected)
+        load_pdb.assert_called_once_with("1abc", ".", verbose=False)
+        load_mmcif.assert_called_once_with("1abc", ".", verbose=False)
+
 
 if __name__ == "__main__":
     unittest.main()
