@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
 
-from openmm import VerletIntegrator
+import numpy as np
+from openmm import MinimizationReporter, VerletIntegrator
 from openmm.app import (
     ForceField,
     HBonds,
@@ -22,7 +25,65 @@ from pdbfixer import PDBFixer
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["fix_pdb", "minimize", "model_solvent"]
+__all__ = ["MinimizationResult", "fix_pdb", "minimize", "model_solvent"]
+
+FORCE_UNIT = kilojoule_per_mole / nanometer
+
+
+@dataclass(frozen=True)
+class MinimizationResult:
+    """Summary of an OpenMM energy minimization."""
+
+    output_path: Path
+    initial_energy_kj_mol: float
+    final_energy_kj_mol: float
+    delta_energy_kj_mol: float
+    initial_rms_force_kj_mol_nm: float
+    final_rms_force_kj_mol_nm: float
+    final_max_force_kj_mol_nm: float
+    iterations: int
+    tolerance_kj_mol_nm: float
+    max_iterations: int
+    converged: bool
+
+
+class _IterationReporter(MinimizationReporter):
+    """Collect one entry for every OpenMM minimizer callback."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.history: list[dict[str, float | int]] = []
+
+    def report(self, iteration, positions, gradient, args) -> bool:
+        self.history.append(
+            {
+                "iteration": int(iteration),
+                "energy_kj_mol": float(args["system energy"]),
+                "restraint_energy_kj_mol": float(args["restraint energy"]),
+                "restraint_strength_kj_mol_nm2": float(
+                    args["restraint strength"]
+                ),
+                "max_constraint_error": float(args["max constraint error"]),
+            }
+        )
+        return False
+
+
+def _get_minimization_diagnostics(context) -> tuple[float, float, float]:
+    """Return potential energy, Cartesian RMS force, and maximum atom force."""
+    state = context.getState(getEnergy=True, getForces=True)
+    energy_kj_mol = state.getPotentialEnergy().value_in_unit(
+        kilojoule_per_mole
+    )
+    forces = state.getForces(asNumpy=True).value_in_unit(FORCE_UNIT)
+
+    rms_force_kj_mol_nm = float(np.sqrt(np.mean(forces**2)))
+    max_force_kj_mol_nm = float(np.linalg.norm(forces, axis=1).max())
+    return (
+        float(energy_kj_mol),
+        rms_force_kj_mol_nm,
+        max_force_kj_mol_nm,
+    )
 
 
 def model_solvent(
@@ -124,7 +185,8 @@ def minimize(
     nonbonded_cutoff_nm: float = 1.0,
     keep_ids: bool = False,
     verbose: bool = True,
-) -> Path:
+    return_diagnostics: bool = False,
+) -> Path | MinimizationResult:
     """Energy-minimize a PDB structure with an OpenMM force field.
 
     Periodic structures are minimized with PME electrostatics. Structures
@@ -139,13 +201,17 @@ def minimize(
         nonbonded_cutoff_nm: Nonbonded cutoff for periodic systems in nanometers.
         keep_ids: Preserve valid chain and residue IDs in the output PDB.
         verbose: Log progress messages at informational level.
+        return_diagnostics: Return energies, forces, iteration count, and
+            convergence status along with the output path.
 
     Returns:
-        Path to the minimized PDB file.
+        Path to the minimized PDB file, or a ``MinimizationResult`` when
+        ``return_diagnostics`` is true.
 
     Raises:
         FileNotFoundError: If ``input_file`` does not exist.
         ValueError: If paths are identical or numeric parameters are invalid.
+        RuntimeError: If minimization produces a non-finite energy or force.
     """
     input_path = Path(input_file)
     output_path = Path(output_file)
@@ -175,10 +241,30 @@ def minimize(
     integrator = VerletIntegrator(0.001 * picoseconds)
     simulation = Simulation(pdb.topology, system, integrator)
     simulation.context.setPositions(pdb.positions)
+    initial_energy, initial_rms_force, _ = _get_minimization_diagnostics(
+        simulation.context
+    )
+
+    reporter = _IterationReporter()
     simulation.minimizeEnergy(
         tolerance=tolerance_kj_mol_nm * kilojoule_per_mole / nanometer,
         maxIterations=max_iterations,
+        reporter=reporter,
     )
+    final_energy, final_rms_force, final_max_force = (
+        _get_minimization_diagnostics(simulation.context)
+    )
+
+    diagnostic_values = (
+        initial_energy,
+        final_energy,
+        initial_rms_force,
+        final_rms_force,
+        final_max_force,
+    )
+    if not all(math.isfinite(value) for value in diagnostic_values):
+        raise RuntimeError("Minimization produced a non-finite energy or force")
+
     positions = simulation.context.getState(positions=True).getPositions()
 
     with output_path.open("w") as output:
@@ -191,7 +277,22 @@ def minimize(
 
     if verbose:
         logger.info("Saved minimized PDB file to %s", output_path)
-    return output_path
+    if not return_diagnostics:
+        return output_path
+
+    return MinimizationResult(
+        output_path=output_path,
+        initial_energy_kj_mol=initial_energy,
+        final_energy_kj_mol=final_energy,
+        delta_energy_kj_mol=final_energy - initial_energy,
+        initial_rms_force_kj_mol_nm=initial_rms_force,
+        final_rms_force_kj_mol_nm=final_rms_force,
+        final_max_force_kj_mol_nm=final_max_force,
+        iterations=len(reporter.history),
+        tolerance_kj_mol_nm=tolerance_kj_mol_nm,
+        max_iterations=max_iterations,
+        converged=final_rms_force <= tolerance_kj_mol_nm,
+    )
 
 
 def fix_pdb(
