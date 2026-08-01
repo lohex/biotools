@@ -28,36 +28,82 @@ logger = logging.getLogger(__name__)
 __all__ = ["MinimizationResult", "fix_pdb", "minimize", "model_solvent"]
 
 FORCE_UNIT = kilojoule_per_mole / nanometer
+_MINIMIZER_CONSTRAINT_TOLERANCE_FLOOR = 1e-4
 
 
 @dataclass(frozen=True)
 class MinimizationResult:
-    """Summary of an OpenMM energy minimization."""
+    """Summary of an OpenMM energy minimization.
+
+    Raw forces come directly from the final ``Context`` and can include force
+    components along constrained degrees of freedom.  ``converged`` instead
+    uses the objective-function gradient and relative constraint error reported
+    by OpenMM.  ``termination_reason`` is one of ``already_converged``,
+    ``converged``, ``max_iterations``, ``constraint_error``, or
+    ``optimizer_stopped``.  ``constraint_tolerance`` is OpenMM's effective
+    minimizer threshold, including its lower bound of 1e-4.
+    """
 
     output_path: Path
     initial_energy_kj_mol: float
     final_energy_kj_mol: float
     delta_energy_kj_mol: float
-    initial_rms_force_kj_mol_nm: float
-    final_rms_force_kj_mol_nm: float
-    final_max_force_kj_mol_nm: float
+    initial_raw_rms_force_kj_mol_nm: float
+    final_raw_rms_force_kj_mol_nm: float
+    final_raw_max_force_kj_mol_nm: float
+    final_objective_rms_gradient_kj_mol_nm: float | None
+    final_max_constraint_error: float | None
     iterations: int
     tolerance_kj_mol_nm: float
+    constraint_tolerance: float
     max_iterations: int
     converged: bool
+    termination_reason: str
+
+    @property
+    def initial_rms_force_kj_mol_nm(self) -> float:
+        """Alias for the pre-minimization raw RMS force."""
+        return self.initial_raw_rms_force_kj_mol_nm
+
+    @property
+    def final_rms_force_kj_mol_nm(self) -> float:
+        """Alias for the post-minimization raw RMS force."""
+        return self.final_raw_rms_force_kj_mol_nm
+
+    @property
+    def final_max_force_kj_mol_nm(self) -> float:
+        """Alias for the post-minimization raw maximum force."""
+        return self.final_raw_max_force_kj_mol_nm
 
 
 class _IterationReporter(MinimizationReporter):
     """Collect one entry for every OpenMM minimizer callback."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        num_particles: int,
+        *,
+        tolerance_kj_mol_nm: float | None = None,
+        constraint_tolerance: float | None = None,
+    ) -> None:
         super().__init__()
+        if num_particles <= 0:
+            raise ValueError("num_particles must be greater than zero")
+        self.num_particles = num_particles
+        self.tolerance_kj_mol_nm = tolerance_kj_mol_nm
+        self.constraint_tolerance = constraint_tolerance
+        self.convergence_requested = False
         self.history: list[dict[str, float | int]] = []
 
     def report(self, iteration, positions, gradient, args) -> bool:
+        gradient_array = np.asarray(gradient, dtype=float)
+        objective_rms_gradient = float(
+            np.sqrt(np.sum(gradient_array**2) / self.num_particles)
+        )
         self.history.append(
             {
                 "iteration": int(iteration),
+                "objective_rms_gradient_kj_mol_nm": objective_rms_gradient,
                 "energy_kj_mol": float(args["system energy"]),
                 "restraint_energy_kj_mol": float(args["restraint energy"]),
                 "restraint_strength_kj_mol_nm2": float(
@@ -66,11 +112,50 @@ class _IterationReporter(MinimizationReporter):
                 "max_constraint_error": float(args["max constraint error"]),
             }
         )
-        return False
+        self.convergence_requested = bool(
+            self.tolerance_kj_mol_nm is not None
+            and self.constraint_tolerance is not None
+            and objective_rms_gradient <= self.tolerance_kj_mol_nm
+            and args["max constraint error"] <= self.constraint_tolerance
+        )
+        return self.convergence_requested
 
 
-def _get_minimization_diagnostics(context) -> tuple[float, float, float]:
-    """Return potential energy, Cartesian RMS force, and maximum atom force."""
+def _classify_minimization_termination(
+    reporter: _IterationReporter,
+    *,
+    tolerance_kj_mol_nm: float,
+    constraint_tolerance: float,
+    max_iterations: int,
+) -> tuple[bool, str]:
+    """Infer convergence and termination reason from reporter callbacks."""
+    if not reporter.history:
+        return True, "already_converged"
+
+    final = reporter.history[-1]
+    gradient_converged = (
+        final["objective_rms_gradient_kj_mol_nm"] <= tolerance_kj_mol_nm
+    )
+    constraints_satisfied = (
+        final["max_constraint_error"] <= constraint_tolerance
+    )
+    if (
+        reporter.convergence_requested
+        or (gradient_converged and constraints_satisfied)
+    ):
+        return True, "converged"
+    if (
+        max_iterations > 0
+        and final["iteration"] + 1 >= max_iterations
+    ):
+        return False, "max_iterations"
+    if not constraints_satisfied:
+        return False, "constraint_error"
+    return False, "optimizer_stopped"
+
+
+def _get_raw_state_diagnostics(context) -> tuple[float, float, float]:
+    """Return energy and unprojected Context force statistics."""
     state = context.getState(getEnergy=True, getForces=True)
     energy_kj_mol = state.getPotentialEnergy().value_in_unit(
         kilojoule_per_mole
@@ -196,12 +281,13 @@ def minimize(
         input_file: Existing PDB structure to minimize.
         output_file: Destination for the minimized PDB structure.
         forcefield_files: OpenMM force-field XML files matching the model.
-        tolerance_kj_mol_nm: RMS force tolerance in kJ/(mol nm).
+        tolerance_kj_mol_nm: RMS objective-gradient tolerance in kJ/(mol nm).
         max_iterations: Maximum minimization iterations; zero means unlimited.
         nonbonded_cutoff_nm: Nonbonded cutoff for periodic systems in nanometers.
         keep_ids: Preserve valid chain and residue IDs in the output PDB.
         verbose: Log progress messages at informational level.
-        return_diagnostics: Return energies, forces, iteration count, and
+        return_diagnostics: Return energies, raw forces, objective gradient,
+            constraint error, iteration count, termination reason, and
             convergence status along with the output path.
 
     Returns:
@@ -241,29 +327,64 @@ def minimize(
     integrator = VerletIntegrator(0.001 * picoseconds)
     simulation = Simulation(pdb.topology, system, integrator)
     simulation.context.setPositions(pdb.positions)
-    initial_energy, initial_rms_force, _ = _get_minimization_diagnostics(
+    initial_energy, initial_raw_rms_force, _ = _get_raw_state_diagnostics(
         simulation.context
     )
 
-    reporter = _IterationReporter()
+    constraint_tolerance = max(
+        _MINIMIZER_CONSTRAINT_TOLERANCE_FLOOR,
+        float(integrator.getConstraintTolerance()),
+    )
+    reporter = _IterationReporter(
+        system.getNumParticles(),
+        tolerance_kj_mol_nm=tolerance_kj_mol_nm,
+        constraint_tolerance=constraint_tolerance,
+    )
     simulation.minimizeEnergy(
         tolerance=tolerance_kj_mol_nm * kilojoule_per_mole / nanometer,
         maxIterations=max_iterations,
         reporter=reporter,
     )
-    final_energy, final_rms_force, final_max_force = (
-        _get_minimization_diagnostics(simulation.context)
+    final_energy, final_raw_rms_force, final_raw_max_force = (
+        _get_raw_state_diagnostics(simulation.context)
+    )
+    converged, termination_reason = _classify_minimization_termination(
+        reporter,
+        tolerance_kj_mol_nm=tolerance_kj_mol_nm,
+        constraint_tolerance=constraint_tolerance,
+        max_iterations=max_iterations,
+    )
+    final_report = reporter.history[-1] if reporter.history else None
+    final_objective_rms_gradient = (
+        float(final_report["objective_rms_gradient_kj_mol_nm"])
+        if final_report is not None
+        else None
+    )
+    final_max_constraint_error = (
+        float(final_report["max_constraint_error"])
+        if final_report is not None
+        else None
     )
 
     diagnostic_values = (
         initial_energy,
         final_energy,
-        initial_rms_force,
-        final_rms_force,
-        final_max_force,
+        initial_raw_rms_force,
+        final_raw_rms_force,
+        final_raw_max_force,
+    )
+    reporter_values = (
+        final_objective_rms_gradient,
+        final_max_constraint_error,
     )
     if not all(math.isfinite(value) for value in diagnostic_values):
         raise RuntimeError("Minimization produced a non-finite energy or force")
+    if not all(
+        value is None or math.isfinite(value) for value in reporter_values
+    ):
+        raise RuntimeError(
+            "Minimization produced a non-finite gradient or constraint error"
+        )
 
     positions = simulation.context.getState(positions=True).getPositions()
 
@@ -285,13 +406,19 @@ def minimize(
         initial_energy_kj_mol=initial_energy,
         final_energy_kj_mol=final_energy,
         delta_energy_kj_mol=final_energy - initial_energy,
-        initial_rms_force_kj_mol_nm=initial_rms_force,
-        final_rms_force_kj_mol_nm=final_rms_force,
-        final_max_force_kj_mol_nm=final_max_force,
+        initial_raw_rms_force_kj_mol_nm=initial_raw_rms_force,
+        final_raw_rms_force_kj_mol_nm=final_raw_rms_force,
+        final_raw_max_force_kj_mol_nm=final_raw_max_force,
+        final_objective_rms_gradient_kj_mol_nm=(
+            final_objective_rms_gradient
+        ),
+        final_max_constraint_error=final_max_constraint_error,
         iterations=len(reporter.history),
         tolerance_kj_mol_nm=tolerance_kj_mol_nm,
+        constraint_tolerance=constraint_tolerance,
         max_iterations=max_iterations,
-        converged=final_rms_force <= tolerance_kj_mol_nm,
+        converged=converged,
+        termination_reason=termination_reason,
     )
 
 

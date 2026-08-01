@@ -17,7 +17,9 @@ OPENMM_AVAILABLE = True
 try:
     from biotools.mdtools import (
         MinimizationResult,
-        _get_minimization_diagnostics,
+        _IterationReporter,
+        _classify_minimization_termination,
+        _get_raw_state_diagnostics,
         fix_pdb,
         minimize,
         model_solvent,
@@ -57,7 +59,9 @@ except ModuleNotFoundError as exc:
     )
     from biotools.mdtools import (
         MinimizationResult,
-        _get_minimization_diagnostics,
+        _IterationReporter,
+        _classify_minimization_termination,
+        _get_raw_state_diagnostics,
         fix_pdb,
         minimize,
         model_solvent,
@@ -132,13 +136,83 @@ class ModelAndMinimizeTests(unittest.TestCase):
         context = MagicMock()
         context.getState.return_value = state
 
-        energy, rms_force, max_force = _get_minimization_diagnostics(context)
+        energy, rms_force, max_force = _get_raw_state_diagnostics(context)
 
         self.assertEqual(energy, 42.5)
         self.assertAlmostEqual(rms_force, np.sqrt(169.0 / 6.0))
         self.assertEqual(max_force, 12.0)
         context.getState.assert_called_once_with(getEnergy=True, getForces=True)
         state.getForces.assert_called_once_with(asNumpy=True)
+
+    def test_reporter_uses_openmm_objective_gradient_norm(self) -> None:
+        """Reporter RMS gradient should use OpenMM's per-particle norm."""
+        reporter = _IterationReporter(num_particles=2)
+        args = {
+            "system energy": 42.0,
+            "restraint energy": 0.5,
+            "restraint strength": 1000.0,
+            "max constraint error": 5e-5,
+        }
+
+        reporter.report(
+            0,
+            None,
+            [3.0, 4.0, 0.0, 0.0, 0.0, 12.0],
+            args,
+        )
+
+        self.assertAlmostEqual(
+            reporter.history[0]["objective_rms_gradient_kj_mol_nm"],
+            np.sqrt(169.0 / 2.0),
+        )
+        self.assertEqual(reporter.history[0]["max_constraint_error"], 5e-5)
+
+    def test_termination_reason_identifies_iteration_limit(self) -> None:
+        """A high final objective gradient at the phase limit is not converged."""
+        reporter = _IterationReporter(num_particles=1)
+        args = {
+            "system energy": 42.0,
+            "restraint energy": 0.0,
+            "restraint strength": 1000.0,
+            "max constraint error": 5e-5,
+        }
+        reporter.report(0, None, [20.0, 0.0, 0.0], args)
+        reporter.report(1, None, [15.0, 0.0, 0.0], args)
+
+        converged, reason = _classify_minimization_termination(
+            reporter,
+            tolerance_kj_mol_nm=10.0,
+            constraint_tolerance=1e-4,
+            max_iterations=2,
+        )
+
+        self.assertFalse(converged)
+        self.assertEqual(reason, "max_iterations")
+
+    def test_termination_reason_identifies_constraint_error(self) -> None:
+        """A small gradient alone must not hide unsatisfied constraints."""
+        reporter = _IterationReporter(num_particles=1)
+        reporter.report(
+            0,
+            None,
+            [1.0, 0.0, 0.0],
+            {
+                "system energy": 42.0,
+                "restraint energy": 0.5,
+                "restraint strength": 1000.0,
+                "max constraint error": 2e-4,
+            },
+        )
+
+        converged, reason = _classify_minimization_termination(
+            reporter,
+            tolerance_kj_mol_nm=10.0,
+            constraint_tolerance=1e-4,
+            max_iterations=0,
+        )
+
+        self.assertFalse(converged)
+        self.assertEqual(reason, "constraint_error")
 
     @unittest.skipUnless(OPENMM_AVAILABLE, "OpenMM is not installed")
     def test_minimize_small_structure_with_openmm(self) -> None:
@@ -164,12 +238,76 @@ class ModelAndMinimizeTests(unittest.TestCase):
                     for value in (
                         result.initial_energy_kj_mol,
                         result.final_energy_kj_mol,
-                        result.initial_rms_force_kj_mol_nm,
-                        result.final_rms_force_kj_mol_nm,
-                        result.final_max_force_kj_mol_nm,
+                        result.initial_raw_rms_force_kj_mol_nm,
+                        result.final_raw_rms_force_kj_mol_nm,
+                        result.final_raw_max_force_kj_mol_nm,
                     )
                 )
             )
+            self.assertIsNone(result.final_objective_rms_gradient_kj_mol_nm)
+            self.assertIsNone(result.final_max_constraint_error)
+            self.assertTrue(result.converged)
+            self.assertEqual(result.termination_reason, "already_converged")
+
+    @unittest.skipUnless(OPENMM_AVAILABLE, "OpenMM is not installed")
+    def test_minimize_constrained_solvated_system_with_openmm(self) -> None:
+        """Reporter convergence should work for a periodic rigid-water box."""
+        from openmm import Vec3
+        from openmm.app import (
+            ForceField as OpenMMForceField,
+            HBonds as OpenMMHBonds,
+            Modeller as OpenMMModeller,
+            PDBFile as OpenMMPDBFile,
+            Topology,
+        )
+        from openmm.unit import nanometer as openmm_nanometer
+
+        forcefield = OpenMMForceField("amber14/tip3pfb.xml")
+        modeller = OpenMMModeller(Topology(), [])
+        modeller.addSolvent(
+            forcefield,
+            boxSize=Vec3(1.0, 1.0, 1.0) * openmm_nanometer,
+        )
+        constrained_system = forcefield.createSystem(
+            modeller.topology,
+            constraints=OpenMMHBonds,
+        )
+        self.assertGreater(constrained_system.getNumConstraints(), 0)
+
+        with TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "solvated.pdb"
+            output_path = Path(temp_dir) / "minimized.pdb"
+            with input_path.open("w") as output:
+                OpenMMPDBFile.writeFile(
+                    modeller.topology,
+                    modeller.positions,
+                    output,
+                )
+
+            result = minimize(
+                input_path,
+                output_path,
+                forcefield_files=("amber14/tip3pfb.xml",),
+                tolerance_kj_mol_nm=500.0,
+                nonbonded_cutoff_nm=0.4,
+                verbose=False,
+                return_diagnostics=True,
+            )
+
+        self.assertIsInstance(result, MinimizationResult)
+        self.assertGreater(result.iterations, 0)
+        self.assertIsNotNone(result.final_objective_rms_gradient_kj_mol_nm)
+        self.assertIsNotNone(result.final_max_constraint_error)
+        self.assertLessEqual(
+            result.final_objective_rms_gradient_kj_mol_nm,
+            result.tolerance_kj_mol_nm,
+        )
+        self.assertLessEqual(
+            result.final_max_constraint_error,
+            result.constraint_tolerance,
+        )
+        self.assertTrue(result.converged)
+        self.assertEqual(result.termination_reason, "converged")
 
     def test_model_solvent_adds_ph_hydrogens_and_solvent(self) -> None:
         """Model preparation should protonate and solvate with chosen values."""
@@ -227,10 +365,12 @@ class ModelAndMinimizeTests(unittest.TestCase):
         pdb_file = MagicMock(return_value=pdb)
         pdb_file.writeFile = MagicMock()
         forcefield = MagicMock()
-        system = object()
+        system = MagicMock()
+        system.getNumParticles.return_value = 2
         forcefield.createSystem.return_value = system
         forcefield_constructor = MagicMock(return_value=forcefield)
-        integrator = object()
+        integrator = MagicMock()
+        integrator.getConstraintTolerance.return_value = 1e-5
         integrator_constructor = MagicMock(return_value=integrator)
         minimized_positions = object()
         state = MagicMock()
@@ -256,7 +396,7 @@ class ModelAndMinimizeTests(unittest.TestCase):
                 patch("biotools.mdtools.nanometer", 1.0),
                 patch("biotools.mdtools.picoseconds", 1.0),
                 patch(
-                    "biotools.mdtools._get_minimization_diagnostics",
+                    "biotools.mdtools._get_raw_state_diagnostics",
                     side_effect=[(100.0, 50.0, 75.0), (10.0, 5.0, 8.0)],
                 ),
             ):
@@ -296,7 +436,9 @@ class ModelAndMinimizeTests(unittest.TestCase):
             )
         )
         forcefield = MagicMock()
-        forcefield.createSystem.return_value = object()
+        system = MagicMock()
+        system.getNumParticles.return_value = 2
+        forcefield.createSystem.return_value = system
         simulation = MagicMock()
         simulation.topology = topology
         position_state = MagicMock()
@@ -305,14 +447,23 @@ class ModelAndMinimizeTests(unittest.TestCase):
 
         def run_minimization(**kwargs) -> None:
             reporter = kwargs["reporter"]
-            report_args = {
+            first_report_args = {
                 "system energy": 20.0,
                 "restraint energy": 0.0,
                 "restraint strength": 0.0,
-                "max constraint error": 0.0,
+                "max constraint error": 2e-4,
             }
-            reporter.report(0, None, None, report_args)
-            reporter.report(1, None, None, report_args)
+            final_report_args = {
+                **first_report_args,
+                "max constraint error": 5e-5,
+            }
+            reporter.report(0, None, [30.0, 0.0, 0.0] * 2, first_report_args)
+            reporter.report(
+                0,
+                None,
+                [3.0, 4.0, 0.0, 0.0, 0.0, 0.0],
+                final_report_args,
+            )
 
         simulation.minimizeEnergy.side_effect = run_minimization
 
@@ -323,17 +474,18 @@ class ModelAndMinimizeTests(unittest.TestCase):
             with (
                 patch("biotools.mdtools.PDBFile", pdb_file),
                 patch("biotools.mdtools.ForceField", return_value=forcefield),
-                patch("biotools.mdtools.VerletIntegrator"),
+                patch("biotools.mdtools.VerletIntegrator") as integrator,
                 patch("biotools.mdtools.Simulation", return_value=simulation),
                 patch("biotools.mdtools.NoCutoff", "NoCutoff"),
                 patch("biotools.mdtools.kilojoule_per_mole", 1.0),
                 patch("biotools.mdtools.nanometer", 1.0),
                 patch("biotools.mdtools.picoseconds", 1.0),
                 patch(
-                    "biotools.mdtools._get_minimization_diagnostics",
+                    "biotools.mdtools._get_raw_state_diagnostics",
                     side_effect=[(100.0, 25.0, 40.0), (30.0, 12.0, 18.0)],
                 ),
             ):
+                integrator.return_value.getConstraintTolerance.return_value = 1e-5
                 result = minimize(
                     input_path,
                     output_path,
@@ -347,9 +499,17 @@ class ModelAndMinimizeTests(unittest.TestCase):
         self.assertEqual(result.output_path, output_path)
         self.assertEqual(result.delta_energy_kj_mol, -70.0)
         self.assertEqual(result.iterations, 2)
+        self.assertEqual(result.final_raw_rms_force_kj_mol_nm, 12.0)
+        self.assertEqual(result.final_raw_max_force_kj_mol_nm, 18.0)
         self.assertEqual(result.final_rms_force_kj_mol_nm, 12.0)
         self.assertEqual(result.final_max_force_kj_mol_nm, 18.0)
-        self.assertFalse(result.converged)
+        self.assertAlmostEqual(
+            result.final_objective_rms_gradient_kj_mol_nm,
+            np.sqrt(25.0 / 2.0),
+        )
+        self.assertEqual(result.final_max_constraint_error, 5e-5)
+        self.assertTrue(result.converged)
+        self.assertEqual(result.termination_reason, "converged")
         self.assertEqual(result.max_iterations, 2)
         pdb_file.writeFile.assert_called_once()
 
@@ -384,6 +544,10 @@ class ModelAndMinimizeTests(unittest.TestCase):
         pdb = SimpleNamespace(topology=topology, positions=object())
         simulation = MagicMock()
         simulation.topology = topology
+        forcefield = MagicMock()
+        system = MagicMock()
+        system.getNumParticles.return_value = 2
+        forcefield.createSystem.return_value = system
 
         with TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "input.pdb"
@@ -391,11 +555,11 @@ class ModelAndMinimizeTests(unittest.TestCase):
             input_path.write_text("END\n")
             with (
                 patch("biotools.mdtools.PDBFile", return_value=pdb),
-                patch("biotools.mdtools.ForceField"),
+                patch("biotools.mdtools.ForceField", return_value=forcefield),
                 patch("biotools.mdtools.VerletIntegrator"),
                 patch("biotools.mdtools.Simulation", return_value=simulation),
                 patch(
-                    "biotools.mdtools._get_minimization_diagnostics",
+                    "biotools.mdtools._get_raw_state_diagnostics",
                     side_effect=[(100.0, 25.0, 40.0), (float("nan"), 5.0, 8.0)],
                 ),
             ):
