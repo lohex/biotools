@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
 
 import numpy as np
-from openmm import MinimizationReporter, VerletIntegrator
+from openmm import MinimizationReporter, Platform, VerletIntegrator
 from openmm.app import (
     ForceField,
     HBonds,
@@ -268,6 +268,8 @@ def minimize(
     tolerance_kj_mol_nm: float = 10.0,
     max_iterations: int = 1000,
     nonbonded_cutoff_nm: float = 1.0,
+    platform_name: str | None = None,
+    platform_properties: Mapping[str, str] | None = None,
     keep_ids: bool = False,
     verbose: bool = True,
     return_diagnostics: bool = False,
@@ -284,6 +286,10 @@ def minimize(
         tolerance_kj_mol_nm: RMS objective-gradient tolerance in kJ/(mol nm).
         max_iterations: Maximum minimization iterations; zero means unlimited.
         nonbonded_cutoff_nm: Nonbonded cutoff for periodic systems in nanometers.
+        platform_name: OpenMM platform name, such as ``CUDA``, ``HIP``,
+            ``OpenCL``, or ``CPU``. By default OpenMM selects the platform.
+        platform_properties: Platform-specific Context properties, such as
+            ``{"DeviceIndex": "0", "Precision": "mixed"}`` for a GPU.
         keep_ids: Preserve valid chain and residue IDs in the output PDB.
         verbose: Log progress messages at informational level.
         return_diagnostics: Return energies, raw forces, objective gradient,
@@ -311,6 +317,12 @@ def minimize(
         raise ValueError("max_iterations must not be negative")
     if nonbonded_cutoff_nm <= 0:
         raise ValueError("nonbonded_cutoff_nm must be greater than zero")
+    if platform_name is not None and not platform_name.strip():
+        raise ValueError("platform_name must not be empty")
+    if platform_properties and platform_name is None:
+        raise ValueError(
+            "platform_properties requires an explicit platform_name"
+        )
 
     if verbose:
         logger.info("Energy-minimizing PDB file %s", input_path)
@@ -325,7 +337,26 @@ def minimize(
 
     system = forcefield.createSystem(pdb.topology, **system_options)
     integrator = VerletIntegrator(0.001 * picoseconds)
-    simulation = Simulation(pdb.topology, system, integrator)
+    simulation_options = {}
+    if platform_name is not None:
+        simulation_options["platform"] = Platform.getPlatformByName(
+            platform_name
+        )
+        if platform_properties:
+            simulation_options["platformProperties"] = dict(
+                platform_properties
+            )
+    simulation = Simulation(
+        pdb.topology,
+        system,
+        integrator,
+        **simulation_options,
+    )
+    if verbose:
+        logger.info(
+            "Using OpenMM platform %s",
+            simulation.context.getPlatform().getName(),
+        )
     simulation.context.setPositions(pdb.positions)
     initial_energy, initial_raw_rms_force, _ = _get_raw_state_diagnostics(
         simulation.context

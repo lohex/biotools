@@ -34,6 +34,7 @@ except ModuleNotFoundError as exc:
     openmm_unit_module = ModuleType("openmm.unit")
     pdbfixer_module = ModuleType("pdbfixer")
     openmm_module.MinimizationReporter = type("MinimizationReporter", (), {})
+    openmm_module.Platform = MagicMock()
     openmm_module.VerletIntegrator = MagicMock()
     openmm_app_module.ForceField = MagicMock()
     openmm_app_module.HBonds = object()
@@ -424,6 +425,77 @@ class ModelAndMinimizeTests(unittest.TestCase):
         self.assertEqual(reporter.history, [])
         pdb_file.writeFile.assert_called_once()
 
+    def test_minimize_selects_requested_gpu_platform(self) -> None:
+        """GPU platform and device properties should reach the Context."""
+        topology = MagicMock()
+        topology.getPeriodicBoxVectors.return_value = None
+        pdb = SimpleNamespace(topology=topology, positions=object())
+        pdb_file = MagicMock(return_value=pdb)
+        pdb_file.writeFile = MagicMock()
+        forcefield = MagicMock()
+        system = MagicMock()
+        system.getNumParticles.return_value = 2
+        forcefield.createSystem.return_value = system
+        integrator = MagicMock()
+        integrator.getConstraintTolerance.return_value = 1e-5
+        selected_platform = object()
+        platform = MagicMock()
+        platform.getPlatformByName.return_value = selected_platform
+        position_state = MagicMock()
+        position_state.getPositions.return_value = object()
+        simulation = MagicMock()
+        simulation.topology = topology
+        simulation.context.getState.return_value = position_state
+
+        with TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "input.pdb"
+            output_path = Path(temp_dir) / "minimized.pdb"
+            input_path.write_text("END\n")
+            with (
+                patch("biotools.mdtools.PDBFile", pdb_file),
+                patch("biotools.mdtools.ForceField", return_value=forcefield),
+                patch(
+                    "biotools.mdtools.VerletIntegrator",
+                    return_value=integrator,
+                ),
+                patch("biotools.mdtools.Platform", platform),
+                patch(
+                    "biotools.mdtools.Simulation",
+                    return_value=simulation,
+                ) as constructor,
+                patch("biotools.mdtools.NoCutoff", "NoCutoff"),
+                patch("biotools.mdtools.kilojoule_per_mole", 1.0),
+                patch("biotools.mdtools.nanometer", 1.0),
+                patch("biotools.mdtools.picoseconds", 1.0),
+                patch(
+                    "biotools.mdtools._get_raw_state_diagnostics",
+                    side_effect=[(100.0, 50.0, 75.0), (10.0, 5.0, 8.0)],
+                ),
+            ):
+                result = minimize(
+                    input_path,
+                    output_path,
+                    platform_name="CUDA",
+                    platform_properties={
+                        "DeviceIndex": "1",
+                        "Precision": "mixed",
+                    },
+                    verbose=False,
+                )
+
+        self.assertEqual(result, output_path)
+        platform.getPlatformByName.assert_called_once_with("CUDA")
+        constructor.assert_called_once_with(
+            topology,
+            system,
+            integrator,
+            platform=selected_platform,
+            platformProperties={
+                "DeviceIndex": "1",
+                "Precision": "mixed",
+            },
+        )
+
     def test_minimize_returns_diagnostics_when_requested(self) -> None:
         """Diagnostics should describe energy change and force convergence."""
         topology = MagicMock()
@@ -536,6 +608,13 @@ class ModelAndMinimizeTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "must be different"):
                 minimize(input_path, input_path)
+
+            with self.assertRaisesRegex(ValueError, "requires.*platform_name"):
+                minimize(
+                    input_path,
+                    output_path,
+                    platform_properties={"DeviceIndex": "0"},
+                )
 
     def test_minimize_rejects_nonfinite_diagnostics(self) -> None:
         """An invalid OpenMM energy or force should fail the preparation."""
