@@ -42,6 +42,8 @@ class MinimizationResult:
     ``converged``, ``max_iterations``, ``constraint_error``, or
     ``optimizer_stopped``.  ``constraint_tolerance`` is OpenMM's effective
     minimizer threshold, including its lower bound of 1e-4.
+    ``optimizer_restarts`` reports how many additional L-BFGS attempts were
+    made in the same Context.
     """
 
     output_path: Path
@@ -54,6 +56,7 @@ class MinimizationResult:
     final_objective_rms_gradient_kj_mol_nm: float | None
     final_max_constraint_error: float | None
     iterations: int
+    optimizer_restarts: int
     tolerance_kj_mol_nm: float
     constraint_tolerance: float
     max_iterations: int
@@ -152,6 +155,30 @@ def _classify_minimization_termination(
     if not constraints_satisfied:
         return False, "constraint_error"
     return False, "optimizer_stopped"
+
+
+def _should_restart_optimizer(
+    reporter: _IterationReporter,
+    *,
+    termination_reason: str,
+    tolerance_kj_mol_nm: float,
+    constraint_tolerance: float,
+    optimizer_restarts: int,
+    max_optimizer_restarts: int,
+) -> bool:
+    """Return whether another L-BFGS attempt should use the current Context."""
+    if (
+        termination_reason != "optimizer_stopped"
+        or optimizer_restarts >= max_optimizer_restarts
+        or not reporter.history
+    ):
+        return False
+    final_report = reporter.history[-1]
+    return bool(
+        final_report["max_constraint_error"] <= constraint_tolerance
+        and final_report["objective_rms_gradient_kj_mol_nm"]
+        > tolerance_kj_mol_nm
+    )
 
 
 def _get_raw_state_diagnostics(context) -> tuple[float, float, float]:
@@ -267,6 +294,7 @@ def minimize(
     ),
     tolerance_kj_mol_nm: float = 10.0,
     max_iterations: int = 1000,
+    max_optimizer_restarts: int = 0,
     nonbonded_cutoff_nm: float = 1.0,
     platform_name: str | None = None,
     platform_properties: Mapping[str, str] | None = None,
@@ -285,6 +313,9 @@ def minimize(
         forcefield_files: OpenMM force-field XML files matching the model.
         tolerance_kj_mol_nm: RMS objective-gradient tolerance in kJ/(mol nm).
         max_iterations: Maximum minimization iterations; zero means unlimited.
+        max_optimizer_restarts: Maximum number of fresh L-BFGS attempts after
+            ``optimizer_stopped`` with acceptable constraints; zero disables
+            automatic restarts.
         nonbonded_cutoff_nm: Nonbonded cutoff for periodic systems in nanometers.
         platform_name: OpenMM platform name, such as ``CUDA``, ``HIP``,
             ``OpenCL``, or ``CPU``. By default OpenMM selects the platform.
@@ -315,6 +346,8 @@ def minimize(
         raise ValueError("tolerance_kj_mol_nm must be greater than zero")
     if max_iterations < 0:
         raise ValueError("max_iterations must not be negative")
+    if max_optimizer_restarts < 0:
+        raise ValueError("max_optimizer_restarts must not be negative")
     if nonbonded_cutoff_nm <= 0:
         raise ValueError("nonbonded_cutoff_nm must be greater than zero")
     if platform_name is not None and not platform_name.strip():
@@ -366,26 +399,48 @@ def minimize(
         _MINIMIZER_CONSTRAINT_TOLERANCE_FLOOR,
         float(integrator.getConstraintTolerance()),
     )
-    reporter = _IterationReporter(
-        system.getNumParticles(),
-        tolerance_kj_mol_nm=tolerance_kj_mol_nm,
-        constraint_tolerance=constraint_tolerance,
-    )
-    simulation.minimizeEnergy(
-        tolerance=tolerance_kj_mol_nm * kilojoule_per_mole / nanometer,
-        maxIterations=max_iterations,
-        reporter=reporter,
-    )
+    total_iterations = 0
+    optimizer_restarts = 0
+    while True:
+        reporter = _IterationReporter(
+            system.getNumParticles(),
+            tolerance_kj_mol_nm=tolerance_kj_mol_nm,
+            constraint_tolerance=constraint_tolerance,
+        )
+        simulation.minimizeEnergy(
+            tolerance=tolerance_kj_mol_nm * kilojoule_per_mole / nanometer,
+            maxIterations=max_iterations,
+            reporter=reporter,
+        )
+        total_iterations += len(reporter.history)
+        converged, termination_reason = _classify_minimization_termination(
+            reporter,
+            tolerance_kj_mol_nm=tolerance_kj_mol_nm,
+            constraint_tolerance=constraint_tolerance,
+            max_iterations=max_iterations,
+        )
+        final_report = reporter.history[-1] if reporter.history else None
+        restart_optimizer = _should_restart_optimizer(
+            reporter,
+            termination_reason=termination_reason,
+            tolerance_kj_mol_nm=tolerance_kj_mol_nm,
+            constraint_tolerance=constraint_tolerance,
+            optimizer_restarts=optimizer_restarts,
+            max_optimizer_restarts=max_optimizer_restarts,
+        )
+        if not restart_optimizer:
+            break
+        optimizer_restarts += 1
+        if verbose:
+            logger.info(
+                "Restarting OpenMM L-BFGS optimizer (%d/%d)",
+                optimizer_restarts,
+                max_optimizer_restarts,
+            )
+
     final_energy, final_raw_rms_force, final_raw_max_force = (
         _get_raw_state_diagnostics(simulation.context)
     )
-    converged, termination_reason = _classify_minimization_termination(
-        reporter,
-        tolerance_kj_mol_nm=tolerance_kj_mol_nm,
-        constraint_tolerance=constraint_tolerance,
-        max_iterations=max_iterations,
-    )
-    final_report = reporter.history[-1] if reporter.history else None
     final_objective_rms_gradient = (
         float(final_report["objective_rms_gradient_kj_mol_nm"])
         if final_report is not None
@@ -444,7 +499,8 @@ def minimize(
             final_objective_rms_gradient
         ),
         final_max_constraint_error=final_max_constraint_error,
-        iterations=len(reporter.history),
+        iterations=total_iterations,
+        optimizer_restarts=optimizer_restarts,
         tolerance_kj_mol_nm=tolerance_kj_mol_nm,
         constraint_tolerance=constraint_tolerance,
         max_iterations=max_iterations,

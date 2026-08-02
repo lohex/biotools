@@ -20,6 +20,7 @@ try:
         _IterationReporter,
         _classify_minimization_termination,
         _get_raw_state_diagnostics,
+        _should_restart_optimizer,
         fix_pdb,
         minimize,
         model_solvent,
@@ -63,6 +64,7 @@ except ModuleNotFoundError as exc:
         _IterationReporter,
         _classify_minimization_termination,
         _get_raw_state_diagnostics,
+        _should_restart_optimizer,
         fix_pdb,
         minimize,
         model_solvent,
@@ -215,6 +217,66 @@ class ModelAndMinimizeTests(unittest.TestCase):
         self.assertFalse(converged)
         self.assertEqual(reason, "constraint_error")
 
+    def test_optimizer_restart_requires_exact_retry_conditions(self) -> None:
+        """Only optimizer stops with valid constraints and budget may restart."""
+        reporter = _IterationReporter(num_particles=1)
+        report_args = {
+            "system energy": 42.0,
+            "restraint energy": 0.0,
+            "restraint strength": 1000.0,
+            "max constraint error": 5e-5,
+        }
+        reporter.report(0, None, [20.0, 0.0, 0.0], report_args)
+        retry_options = {
+            "tolerance_kj_mol_nm": 10.0,
+            "constraint_tolerance": 1e-4,
+            "optimizer_restarts": 0,
+        }
+
+        self.assertFalse(
+            _should_restart_optimizer(
+                reporter,
+                termination_reason="optimizer_stopped",
+                max_optimizer_restarts=0,
+                **retry_options,
+            )
+        )
+        self.assertTrue(
+            _should_restart_optimizer(
+                reporter,
+                termination_reason="optimizer_stopped",
+                max_optimizer_restarts=1,
+                **retry_options,
+            )
+        )
+        for reason in ("max_iterations", "constraint_error", "converged"):
+            with self.subTest(reason=reason):
+                self.assertFalse(
+                    _should_restart_optimizer(
+                        reporter,
+                        termination_reason=reason,
+                        max_optimizer_restarts=1,
+                        **retry_options,
+                    )
+                )
+
+        report_args["max constraint error"] = 2e-4
+        constrained_reporter = _IterationReporter(num_particles=1)
+        constrained_reporter.report(
+            0,
+            None,
+            [20.0, 0.0, 0.0],
+            report_args,
+        )
+        self.assertFalse(
+            _should_restart_optimizer(
+                constrained_reporter,
+                termination_reason="optimizer_stopped",
+                max_optimizer_restarts=1,
+                **retry_options,
+            )
+        )
+
     @unittest.skipUnless(OPENMM_AVAILABLE, "OpenMM is not installed")
     def test_minimize_small_structure_with_openmm(self) -> None:
         """A local water fixture should produce finite diagnostics and a PDB."""
@@ -249,6 +311,7 @@ class ModelAndMinimizeTests(unittest.TestCase):
             self.assertIsNone(result.final_max_constraint_error)
             self.assertTrue(result.converged)
             self.assertEqual(result.termination_reason, "already_converged")
+            self.assertEqual(result.optimizer_restarts, 0)
 
     @unittest.skipUnless(OPENMM_AVAILABLE, "OpenMM is not installed")
     def test_minimize_constrained_solvated_system_with_openmm(self) -> None:
@@ -309,6 +372,7 @@ class ModelAndMinimizeTests(unittest.TestCase):
         )
         self.assertTrue(result.converged)
         self.assertEqual(result.termination_reason, "converged")
+        self.assertEqual(result.optimizer_restarts, 0)
 
     def test_model_solvent_adds_ph_hydrogens_and_solvent(self) -> None:
         """Model preparation should protonate and solvate with chosen values."""
@@ -496,8 +560,8 @@ class ModelAndMinimizeTests(unittest.TestCase):
             },
         )
 
-    def test_minimize_returns_diagnostics_when_requested(self) -> None:
-        """Diagnostics should describe energy change and force convergence."""
+    def test_minimize_converges_after_optimizer_restart(self) -> None:
+        """A fresh reporter should converge in the unchanged Context."""
         topology = MagicMock()
         topology.getPeriodicBoxVectors.return_value = None
         pdb = SimpleNamespace(topology=topology, positions=object())
@@ -519,23 +583,17 @@ class ModelAndMinimizeTests(unittest.TestCase):
 
         def run_minimization(**kwargs) -> None:
             reporter = kwargs["reporter"]
-            first_report_args = {
+            report_args = {
                 "system energy": 20.0,
                 "restraint energy": 0.0,
                 "restraint strength": 0.0,
-                "max constraint error": 2e-4,
-            }
-            final_report_args = {
-                **first_report_args,
                 "max constraint error": 5e-5,
             }
-            reporter.report(0, None, [30.0, 0.0, 0.0] * 2, first_report_args)
-            reporter.report(
-                0,
-                None,
-                [3.0, 4.0, 0.0, 0.0, 0.0, 0.0],
-                final_report_args,
-            )
+            if simulation.minimizeEnergy.call_count == 1:
+                gradient = [30.0, 0.0, 0.0] * 2
+            else:
+                gradient = [3.0, 4.0, 0.0, 0.0, 0.0, 0.0]
+            reporter.report(0, None, gradient, report_args)
 
         simulation.minimizeEnergy.side_effect = run_minimization
 
@@ -563,6 +621,7 @@ class ModelAndMinimizeTests(unittest.TestCase):
                     output_path,
                     tolerance_kj_mol_nm=10.0,
                     max_iterations=2,
+                    max_optimizer_restarts=1,
                     return_diagnostics=True,
                 )
             self.assertEqual(output_path.read_text(), "END\n")
@@ -571,6 +630,7 @@ class ModelAndMinimizeTests(unittest.TestCase):
         self.assertEqual(result.output_path, output_path)
         self.assertEqual(result.delta_energy_kj_mol, -70.0)
         self.assertEqual(result.iterations, 2)
+        self.assertEqual(result.optimizer_restarts, 1)
         self.assertEqual(result.final_raw_rms_force_kj_mol_nm, 12.0)
         self.assertEqual(result.final_raw_max_force_kj_mol_nm, 18.0)
         self.assertEqual(result.final_rms_force_kj_mol_nm, 12.0)
@@ -583,6 +643,13 @@ class ModelAndMinimizeTests(unittest.TestCase):
         self.assertTrue(result.converged)
         self.assertEqual(result.termination_reason, "converged")
         self.assertEqual(result.max_iterations, 2)
+        self.assertEqual(simulation.minimizeEnergy.call_count, 2)
+        reporters = [
+            call.kwargs["reporter"]
+            for call in simulation.minimizeEnergy.call_args_list
+        ]
+        self.assertIsNot(reporters[0], reporters[1])
+        simulation.context.setPositions.assert_called_once_with(pdb.positions)
         pdb_file.writeFile.assert_called_once()
 
     def test_minimize_preserves_numeric_and_path_validation(self) -> None:
@@ -596,6 +663,7 @@ class ModelAndMinimizeTests(unittest.TestCase):
                 {"tolerance_kj_mol_nm": 0.0},
                 {"tolerance_kj_mol_nm": -1.0},
                 {"max_iterations": -1},
+                {"max_optimizer_restarts": -1},
                 {"nonbonded_cutoff_nm": 0.0},
                 {"nonbonded_cutoff_nm": -1.0},
             )

@@ -206,6 +206,29 @@ minimize(
 )
 ```
 
+OpenMM can occasionally stop its L-BFGS optimizer before reaching the
+requested objective-gradient tolerance. Optional optimizer restarts continue
+from the current coordinates in the same OpenMM context:
+
+```python
+result = minimize(
+    "solvated.pdb",
+    "minimized.pdb",
+    max_iterations=1000,
+    max_optimizer_restarts=2,
+    return_diagnostics=True,
+)
+
+print(result.optimizer_restarts)
+print(result.termination_reason)
+print(result.converged)
+```
+
+Restarts only occur for `optimizer_stopped` with satisfied constraints and an
+objective RMS gradient above the requested tolerance. They are not attempted
+after `max_iterations`, for unsatisfied constraints, or after convergence. The
+default `max_optimizer_restarts=0` preserves the single-attempt behavior.
+
 ## Logging
 
 The library uses Python's standard `logging` package and does not configure
