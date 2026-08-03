@@ -47,6 +47,9 @@ class EquilibrationSample:
     volume_nm3: float | None
     density_g_ml: float | None
     pressure_bar: float | None
+    phase: str = "equilibration"
+    target_temperature_k: float | None = None
+    timestep_fs: float | None = None
 
 
 @dataclass(frozen=True)
@@ -104,11 +107,17 @@ class EquilibrationProgress:
     num_particles: int
     max_steps: int
     samples: tuple[EquilibrationSample, ...]
+    initial_step: int = 0
 
     @property
     def current_step(self) -> int:
         """Step represented by the most recent sample."""
         return self.samples[-1].step if self.samples else 0
+
+    @property
+    def steps_this_run(self) -> int:
+        """Number of steps completed since loading the optional input state."""
+        return self.current_step - self.initial_step
 
 
 @dataclass(frozen=True)
@@ -151,6 +160,16 @@ class EquilibrationResult:
     target_pressure_bar: float | None
     assessment: EquilibrationAssessment
     samples: tuple[EquilibrationSample, ...]
+    state_path: Path | None = None
+    checkpoint_path: Path | None = None
+    warmup_steps: int = 0
+    initial_temperature_k: float | None = None
+    initial_timestep_fs: float | None = None
+    target_timestep_fs: float | None = None
+    input_state_path: Path | None = None
+    input_checkpoint_path: Path | None = None
+    initial_step: int = 0
+    final_step: int = 0
 
     @property
     def converged(self) -> bool:
@@ -331,6 +350,9 @@ def _sample_state(
     total_mass,
     periodic: bool,
     barostat: MonteCarloBarostat | None,
+    phase: str = "equilibration",
+    target_temperature_k: float | None = None,
+    timestep_fs: float | None = None,
 ) -> EquilibrationSample:
     state = simulation.context.getState(getEnergy=True)
     potential_energy = float(
@@ -372,6 +394,9 @@ def _sample_state(
         volume_nm3=volume,
         density_g_ml=density,
         pressure_bar=pressure,
+        phase=phase,
+        target_temperature_k=target_temperature_k,
+        timestep_fs=timestep_fs,
     )
     numeric_values = (
         sample.time_ps,
@@ -410,6 +435,88 @@ def _normalize_assessment(
     )
 
 
+def _validate_auxiliary_output_paths(
+    input_path: Path,
+    output_path: Path,
+    state_output_file: str | PathLike[str] | None,
+    checkpoint_output_file: str | PathLike[str] | None,
+) -> tuple[Path | None, Path | None]:
+    """Validate optional state and checkpoint destinations."""
+    state_path = Path(state_output_file) if state_output_file is not None else None
+    checkpoint_path = (
+        Path(checkpoint_output_file)
+        if checkpoint_output_file is not None
+        else None
+    )
+    destinations = [output_path]
+    for name, path in (
+        ("state_output_file", state_path),
+        ("checkpoint_output_file", checkpoint_path),
+    ):
+        if path is None:
+            continue
+        if path.resolve() == input_path.resolve():
+            raise ValueError(f"{name} must not overwrite input_file")
+        if any(path.resolve() == destination.resolve() for destination in destinations):
+            raise ValueError("PDB, state, and checkpoint outputs must be different")
+        destinations.append(path)
+    return state_path, checkpoint_path
+
+
+def _validate_resume_input_paths(
+    state_input_file: str | PathLike[str] | None,
+    checkpoint_input_file: str | PathLike[str] | None,
+) -> tuple[Path | None, Path | None]:
+    """Validate mutually exclusive XML State and checkpoint inputs."""
+    if state_input_file is not None and checkpoint_input_file is not None:
+        raise ValueError(
+            "state_input_file and checkpoint_input_file are mutually exclusive"
+        )
+    state_input_path = (
+        Path(state_input_file) if state_input_file is not None else None
+    )
+    checkpoint_input_path = (
+        Path(checkpoint_input_file)
+        if checkpoint_input_file is not None
+        else None
+    )
+    for name, path in (
+        ("state_input_file", state_input_path),
+        ("checkpoint_input_file", checkpoint_input_path),
+    ):
+        if path is not None and not path.is_file():
+            raise FileNotFoundError(f"{name} not found: {path}")
+    return state_input_path, checkpoint_input_path
+
+
+def _write_equilibration_outputs(
+    simulation: Simulation,
+    *,
+    output_path: Path,
+    state_path: Path | None,
+    checkpoint_path: Path | None,
+    periodic: bool,
+    keep_ids: bool,
+) -> None:
+    """Write a final PDB and optional portable state and exact checkpoint."""
+    final_state = simulation.context.getState(getPositions=True)
+    if periodic:
+        simulation.topology.setPeriodicBoxVectors(
+            final_state.getPeriodicBoxVectors()
+        )
+    with output_path.open("w") as output:
+        PDBFile.writeFile(
+            simulation.topology,
+            final_state.getPositions(),
+            output,
+            keepIds=keep_ids,
+        )
+    if state_path is not None:
+        simulation.saveState(str(state_path))
+    if checkpoint_path is not None:
+        simulation.saveCheckpoint(str(checkpoint_path))
+
+
 def equilibrate(
     input_file: str | PathLike[str],
     output_file: str | PathLike[str],
@@ -432,6 +539,10 @@ def equilibrate(
     platform_name: str | None = None,
     platform_properties: Mapping[str, str] | None = None,
     random_seed: int | None = None,
+    state_input_file: str | PathLike[str] | None = None,
+    checkpoint_input_file: str | PathLike[str] | None = None,
+    state_output_file: str | PathLike[str] | None = None,
+    checkpoint_output_file: str | PathLike[str] | None = None,
     keep_ids: bool = False,
     verbose: bool = True,
 ) -> EquilibrationResult:
@@ -443,6 +554,16 @@ def equilibrate(
     volume stability for NPT.  The run always ends no later than ``max_steps``.
     """
     input_path, output_path = validate_io_paths(input_file, output_file)
+    state_input_path, checkpoint_input_path = _validate_resume_input_paths(
+        state_input_file,
+        checkpoint_input_file,
+    )
+    state_path, checkpoint_path = _validate_auxiliary_output_paths(
+        input_path,
+        output_path,
+        state_output_file,
+        checkpoint_output_file,
+    )
     normalized_ensemble = ensemble.upper()
     if normalized_ensemble not in {"NVT", "NPT"}:
         raise ValueError("ensemble must be 'NVT' or 'NPT'")
@@ -515,13 +636,40 @@ def equilibrate(
     simulation = Simulation(
         pdb.topology, system, integrator, **simulation_options
     )
-    simulation.context.setPositions(pdb.positions)
-    if random_seed is None:
-        simulation.context.setVelocitiesToTemperature(temperature_k * kelvin)
+    if state_input_path is not None:
+        try:
+            simulation.loadState(str(state_input_path))
+        except Exception as error:
+            raise ValueError(
+                f"Could not load OpenMM State: {state_input_path}"
+            ) from error
+        integrator.setTemperature(temperature_k * kelvin)
+        integrator.setStepSize(timestep_fs * femtoseconds)
+        if barostat is not None:
+            simulation.context.setParameter(
+                MonteCarloBarostat.Pressure(), pressure_bar
+            )
+            simulation.context.setParameter(
+                MonteCarloBarostat.Temperature(), temperature_k
+            )
+    elif checkpoint_input_path is not None:
+        try:
+            simulation.loadCheckpoint(str(checkpoint_input_path))
+        except Exception as error:
+            raise ValueError(
+                "Could not load checkpoint into the configured OpenMM System; "
+                "checkpoints require the same compatible System and Integrator"
+            ) from error
     else:
-        simulation.context.setVelocitiesToTemperature(
-            temperature_k * kelvin, random_seed
-        )
+        simulation.context.setPositions(pdb.positions)
+        if random_seed is None:
+            simulation.context.setVelocitiesToTemperature(
+                temperature_k * kelvin
+            )
+        else:
+            simulation.context.setVelocitiesToTemperature(
+                temperature_k * kelvin, random_seed
+            )
     if verbose:
         logger.info(
             "Using OpenMM platform %s",
@@ -541,6 +689,7 @@ def equilibrate(
     degrees_of_freedom = _degrees_of_freedom(system)
     total_mass = _total_mass(system)
     samples: list[EquilibrationSample] = []
+    initial_step = simulation.currentStep
     executed_steps = 0
     assessment = EquilibrationAssessment(
         stop=False,
@@ -554,11 +703,13 @@ def equilibrate(
         samples.append(
             _sample_state(
                 simulation,
-                step=executed_steps,
+                step=simulation.currentStep,
                 degrees_of_freedom=degrees_of_freedom,
                 total_mass=total_mass,
                 periodic=periodic,
                 barostat=barostat,
+                target_temperature_k=temperature_k,
+                timestep_fs=timestep_fs,
             )
         )
         progress = EquilibrationProgress(
@@ -570,6 +721,7 @@ def equilibrate(
             num_particles=num_particles,
             max_steps=max_steps,
             samples=tuple(samples),
+            initial_step=initial_step,
         )
         assessment = _normalize_assessment(callback(progress))
         if assessment.stop:
@@ -579,18 +731,14 @@ def equilibrate(
     termination_reason = (
         assessment.reason if assessment.stop else "max_steps"
     )
-    final_state = simulation.context.getState(getPositions=True)
-    if periodic:
-        simulation.topology.setPeriodicBoxVectors(
-            final_state.getPeriodicBoxVectors()
-        )
-    with output_path.open("w") as output:
-        PDBFile.writeFile(
-            simulation.topology,
-            final_state.getPositions(),
-            output,
-            keepIds=keep_ids,
-        )
+    _write_equilibration_outputs(
+        simulation,
+        output_path=output_path,
+        state_path=state_path,
+        checkpoint_path=checkpoint_path,
+        periodic=periodic,
+        keep_ids=keep_ids,
+    )
 
     if verbose:
         logger.info(
@@ -613,4 +761,13 @@ def equilibrate(
         ),
         assessment=assessment,
         samples=tuple(samples),
+        state_path=state_path,
+        checkpoint_path=checkpoint_path,
+        initial_temperature_k=temperature_k,
+        initial_timestep_fs=timestep_fs,
+        target_timestep_fs=timestep_fs,
+        input_state_path=state_input_path,
+        input_checkpoint_path=checkpoint_input_path,
+        initial_step=initial_step,
+        final_step=simulation.currentStep,
     )

@@ -237,23 +237,31 @@ to relax density and box volume at the target pressure. NPT requires periodic
 box vectors; NVT also supports nonperiodic structures.
 
 ```python
-from biotools.mdtools import equilibrate
+from biotools.mdtools import equilibrate, soft_equilibrate_nvt
 
-nvt = equilibrate(
+soft_nvt = soft_equilibrate_nvt(
     "minimized.pdb",
     "nvt.pdb",
-    ensemble="NVT",
+    initial_temperature_k=50.0,
     temperature_k=300.0,
-    max_steps=250_000,
+    initial_timestep_fs=0.5,
+    timestep_fs=2.0,
+    heating_steps=50_000,
+    max_steps=500_000,
+    state_output_file="nvt-state.xml",
+    checkpoint_output_file="nvt.chk",
 )
 
 npt = equilibrate(
     "nvt.pdb",
     "equilibrated.pdb",
     ensemble="NPT",
+    state_input_file="nvt-state.xml",
     temperature_k=300.0,
     pressure_bar=1.0,
     max_steps=1_000_000,
+    state_output_file="npt-state.xml",
+    checkpoint_output_file="npt.chk",
 )
 
 print(npt.successful, npt.termination_reason, npt.steps)
@@ -261,7 +269,15 @@ print(npt.assessment.criteria)
 print(npt.assessment.metrics)
 print(npt.final_sample.density_g_ml)
 print(npt.final_sample.pressure_bar)
+print(npt.state_path, npt.checkpoint_path)
 ```
+
+`soft_equilibrate_nvt()` starts by assigning velocities at the lower initial
+temperature. It linearly increases both thermostat temperature and integrator
+timestep over `heating_stages` without rebuilding the OpenMM Context or
+reinitializing velocities. Adaptive convergence monitoring starts only after
+the heating ramp reaches the requested target values. `max_steps` is the hard
+limit for heating and subsequent adaptive equilibration combined.
 
 The simulation runs in blocks (`check_interval_steps=5000` by default). After
 each block, the default stability monitor checks a rolling window. NVT checks
@@ -273,6 +289,41 @@ as a hard criterion because its equilibrium fluctuations are large. If the
 criteria are not met, the run stops at `max_steps` and returns
 `successful=False` while still writing the final structure and retaining all
 sampled diagnostics.
+
+Both equilibration functions always write the requested PDB. Optional
+`state_output_file` and `checkpoint_output_file` arguments additionally save
+an OpenMM XML State and binary checkpoint. The XML State includes positions,
+velocities, periodic box vectors, and simulation time and is suitable for
+transferring state. A checkpoint retains the complete Context and integrator
+state for exact continuation with the same compatible OpenMM System.
+
+`equilibrate()` can resume from either format. Use an XML State when changing
+from NVT to NPT, since the NPT System adds a barostat. Use a checkpoint when
+continuing the same ensemble with the same force field, constraints, integrator,
+and barostat configuration:
+
+```python
+# Portable transfer of positions, velocities, box, time, and step count.
+npt = equilibrate(
+    "nvt.pdb",
+    "npt.pdb",
+    ensemble="NPT",
+    state_input_file="nvt-state.xml",
+)
+
+# Exact continuation of a compatible NPT Context.
+continued = equilibrate(
+    "npt.pdb",
+    "npt-continued.pdb",
+    ensemble="NPT",
+    checkpoint_input_file="npt.chk",
+)
+```
+
+The two input options are mutually exclusive. `max_steps` always specifies the
+additional budget for the current call. `result.initial_step` and
+`result.final_step` expose the cumulative OpenMM step numbers, while
+`result.steps` records how many new steps this call executed.
 
 The tolerances can be changed with `EquilibrationCriteria`. For
 system-specific convergence definitions, pass a callback as `monitor`. It is

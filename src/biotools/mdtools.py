@@ -26,6 +26,7 @@ from .md_simulations.minimization import (
     minimize,
 )
 from .md_simulations.preparation import fix_pdb, model_solvent
+from .md_simulations.soft_equilibration import soft_equilibrate_nvt
 
 __all__ = [
     "Ensemble",
@@ -42,4 +43,5 @@ __all__ = [
     "fix_pdb",
     "minimize",
     "model_solvent",
+    "soft_equilibrate_nvt",
 ]
