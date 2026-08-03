@@ -35,6 +35,9 @@ except ModuleNotFoundError as exc:
     openmm_unit_module = ModuleType("openmm.unit")
     pdbfixer_module = ModuleType("pdbfixer")
     openmm_module.MinimizationReporter = type("MinimizationReporter", (), {})
+    openmm_module.CMMotionRemover = type("CMMotionRemover", (), {})
+    openmm_module.LangevinMiddleIntegrator = MagicMock()
+    openmm_module.MonteCarloBarostat = MagicMock()
     openmm_module.Platform = MagicMock()
     openmm_module.VerletIntegrator = MagicMock()
     openmm_app_module.ForceField = MagicMock()
@@ -44,9 +47,18 @@ except ModuleNotFoundError as exc:
     openmm_app_module.PDBFile = MagicMock()
     openmm_app_module.PME = object()
     openmm_app_module.Simulation = MagicMock()
+    openmm_unit_module.MOLAR_GAS_CONSTANT_R = 1.0
+    openmm_unit_module.bar = 1.0
+    openmm_unit_module.dalton = 1.0
+    openmm_unit_module.femtoseconds = 1.0
+    openmm_unit_module.gram = 1.0
+    openmm_unit_module.item = 1.0
+    openmm_unit_module.kelvin = 1.0
     openmm_unit_module.kilojoule_per_mole = 1.0
+    openmm_unit_module.milliliter = 1.0
     openmm_unit_module.molar = 1.0
     openmm_unit_module.nanometer = 1.0
+    openmm_unit_module.picosecond = 1.0
     openmm_unit_module.picoseconds = 1.0
     pdbfixer_module.PDBFixer = MagicMock()
     openmm_module.app = openmm_app_module
@@ -90,8 +102,11 @@ class FixPDBTests(unittest.TestCase):
             output_path = Path(temp_dir) / "fixed.pdb"
             input_path.write_text("END\n")
             with (
-                patch("biotools.mdtools.PDBFixer", fixer_constructor),
-                patch("biotools.mdtools.PDBFile", pdb_file),
+                patch(
+                    "biotools.md_simulations.preparation.PDBFixer",
+                    fixer_constructor,
+                ),
+                patch("biotools.md_simulations.preparation.PDBFile", pdb_file),
             ):
                 result = fix_pdb(input_path, output_path)
 
@@ -393,11 +408,17 @@ class ModelAndMinimizeTests(unittest.TestCase):
             output_path = Path(temp_dir) / "modelled.pdb"
             input_path.write_text("END\n")
             with (
-                patch("biotools.mdtools.PDBFile", pdb_file),
-                patch("biotools.mdtools.ForceField", forcefield_constructor),
-                patch("biotools.mdtools.Modeller", modeller_constructor),
-                patch("biotools.mdtools.nanometer", 1.0),
-                patch("biotools.mdtools.molar", 1.0),
+                patch("biotools.md_simulations.preparation.PDBFile", pdb_file),
+                patch(
+                    "biotools.md_simulations.preparation.ForceField",
+                    forcefield_constructor,
+                ),
+                patch(
+                    "biotools.md_simulations.preparation.Modeller",
+                    modeller_constructor,
+                ),
+                patch("biotools.md_simulations.preparation.nanometer", 1.0),
+                patch("biotools.md_simulations.preparation.molar", 1.0),
             ):
                 result = model_solvent(
                     input_path,
@@ -450,18 +471,34 @@ class ModelAndMinimizeTests(unittest.TestCase):
             output_path = Path(temp_dir) / "minimized.pdb"
             input_path.write_text("END\n")
             with (
-                patch("biotools.mdtools.PDBFile", pdb_file),
-                patch("biotools.mdtools.ForceField", forcefield_constructor),
-                patch("biotools.mdtools.VerletIntegrator", integrator_constructor),
-                patch("biotools.mdtools.Simulation", simulation_constructor),
-                patch("biotools.mdtools.HBonds", "HBonds"),
-                patch("biotools.mdtools.NoCutoff", "NoCutoff"),
-                patch("biotools.mdtools.PME", "PME"),
-                patch("biotools.mdtools.kilojoule_per_mole", 1.0),
-                patch("biotools.mdtools.nanometer", 1.0),
-                patch("biotools.mdtools.picoseconds", 1.0),
+                patch("biotools.md_simulations.minimization.PDBFile", pdb_file),
                 patch(
-                    "biotools.mdtools._get_raw_state_diagnostics",
+                    "biotools.md_simulations.minimization.ForceField",
+                    forcefield_constructor,
+                ),
+                patch(
+                    "biotools.md_simulations.minimization.VerletIntegrator",
+                    integrator_constructor,
+                ),
+                patch(
+                    "biotools.md_simulations.minimization.Simulation",
+                    simulation_constructor,
+                ),
+                patch("biotools.md_simulations.minimization.HBonds", "HBonds"),
+                patch(
+                    "biotools.md_simulations.minimization.NoCutoff",
+                    "NoCutoff",
+                ),
+                patch("biotools.md_simulations.minimization.PME", "PME"),
+                patch(
+                    "biotools.md_simulations.minimization.kilojoule_per_mole",
+                    1.0,
+                ),
+                patch("biotools.md_simulations.minimization.nanometer", 1.0),
+                patch("biotools.md_simulations.minimization.picoseconds", 1.0),
+                patch(
+                    "biotools.md_simulations.minimization."
+                    "_get_raw_state_diagnostics",
                     side_effect=[(100.0, 50.0, 75.0), (10.0, 5.0, 8.0)],
                 ),
             ):
@@ -516,23 +553,33 @@ class ModelAndMinimizeTests(unittest.TestCase):
             output_path = Path(temp_dir) / "minimized.pdb"
             input_path.write_text("END\n")
             with (
-                patch("biotools.mdtools.PDBFile", pdb_file),
-                patch("biotools.mdtools.ForceField", return_value=forcefield),
+                patch("biotools.md_simulations.minimization.PDBFile", pdb_file),
                 patch(
-                    "biotools.mdtools.VerletIntegrator",
+                    "biotools.md_simulations.minimization.ForceField",
+                    return_value=forcefield,
+                ),
+                patch(
+                    "biotools.md_simulations.minimization.VerletIntegrator",
                     return_value=integrator,
                 ),
-                patch("biotools.mdtools.Platform", platform),
+                patch("biotools.md_simulations.common.Platform", platform),
                 patch(
-                    "biotools.mdtools.Simulation",
+                    "biotools.md_simulations.minimization.Simulation",
                     return_value=simulation,
                 ) as constructor,
-                patch("biotools.mdtools.NoCutoff", "NoCutoff"),
-                patch("biotools.mdtools.kilojoule_per_mole", 1.0),
-                patch("biotools.mdtools.nanometer", 1.0),
-                patch("biotools.mdtools.picoseconds", 1.0),
                 patch(
-                    "biotools.mdtools._get_raw_state_diagnostics",
+                    "biotools.md_simulations.minimization.NoCutoff",
+                    "NoCutoff",
+                ),
+                patch(
+                    "biotools.md_simulations.minimization.kilojoule_per_mole",
+                    1.0,
+                ),
+                patch("biotools.md_simulations.minimization.nanometer", 1.0),
+                patch("biotools.md_simulations.minimization.picoseconds", 1.0),
+                patch(
+                    "biotools.md_simulations.minimization."
+                    "_get_raw_state_diagnostics",
                     side_effect=[(100.0, 50.0, 75.0), (10.0, 5.0, 8.0)],
                 ),
             ):
@@ -602,16 +649,31 @@ class ModelAndMinimizeTests(unittest.TestCase):
             output_path = Path(temp_dir) / "minimized.pdb"
             input_path.write_text("END\n")
             with (
-                patch("biotools.mdtools.PDBFile", pdb_file),
-                patch("biotools.mdtools.ForceField", return_value=forcefield),
-                patch("biotools.mdtools.VerletIntegrator") as integrator,
-                patch("biotools.mdtools.Simulation", return_value=simulation),
-                patch("biotools.mdtools.NoCutoff", "NoCutoff"),
-                patch("biotools.mdtools.kilojoule_per_mole", 1.0),
-                patch("biotools.mdtools.nanometer", 1.0),
-                patch("biotools.mdtools.picoseconds", 1.0),
+                patch("biotools.md_simulations.minimization.PDBFile", pdb_file),
                 patch(
-                    "biotools.mdtools._get_raw_state_diagnostics",
+                    "biotools.md_simulations.minimization.ForceField",
+                    return_value=forcefield,
+                ),
+                patch(
+                    "biotools.md_simulations.minimization.VerletIntegrator"
+                ) as integrator,
+                patch(
+                    "biotools.md_simulations.minimization.Simulation",
+                    return_value=simulation,
+                ),
+                patch(
+                    "biotools.md_simulations.minimization.NoCutoff",
+                    "NoCutoff",
+                ),
+                patch(
+                    "biotools.md_simulations.minimization.kilojoule_per_mole",
+                    1.0,
+                ),
+                patch("biotools.md_simulations.minimization.nanometer", 1.0),
+                patch("biotools.md_simulations.minimization.picoseconds", 1.0),
+                patch(
+                    "biotools.md_simulations.minimization."
+                    "_get_raw_state_diagnostics",
                     side_effect=[(100.0, 25.0, 40.0), (30.0, 12.0, 18.0)],
                 ),
             ):
@@ -701,12 +763,22 @@ class ModelAndMinimizeTests(unittest.TestCase):
             output_path = Path(temp_dir) / "minimized.pdb"
             input_path.write_text("END\n")
             with (
-                patch("biotools.mdtools.PDBFile", return_value=pdb),
-                patch("biotools.mdtools.ForceField", return_value=forcefield),
-                patch("biotools.mdtools.VerletIntegrator"),
-                patch("biotools.mdtools.Simulation", return_value=simulation),
                 patch(
-                    "biotools.mdtools._get_raw_state_diagnostics",
+                    "biotools.md_simulations.minimization.PDBFile",
+                    return_value=pdb,
+                ),
+                patch(
+                    "biotools.md_simulations.minimization.ForceField",
+                    return_value=forcefield,
+                ),
+                patch("biotools.md_simulations.minimization.VerletIntegrator"),
+                patch(
+                    "biotools.md_simulations.minimization.Simulation",
+                    return_value=simulation,
+                ),
+                patch(
+                    "biotools.md_simulations.minimization."
+                    "_get_raw_state_diagnostics",
                     side_effect=[(100.0, 25.0, 40.0), (float("nan"), 5.0, 8.0)],
                 ),
             ):

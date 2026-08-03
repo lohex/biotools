@@ -229,6 +229,76 @@ objective RMS gradient above the requested tolerance. They are not attempted
 after `max_iterations`, for unsatisfied constraints, or after convergence. The
 default `max_optimizer_restarts=0` preserves the single-attempt behavior.
 
+### Equilibrate a minimized structure
+
+NVT and NPT are both common equilibration ensembles. A typical explicit-solvent
+workflow first uses NVT to bring the system to the target temperature, then NPT
+to relax density and box volume at the target pressure. NPT requires periodic
+box vectors; NVT also supports nonperiodic structures.
+
+```python
+from biotools.mdtools import equilibrate
+
+nvt = equilibrate(
+    "minimized.pdb",
+    "nvt.pdb",
+    ensemble="NVT",
+    temperature_k=300.0,
+    max_steps=250_000,
+)
+
+npt = equilibrate(
+    "nvt.pdb",
+    "equilibrated.pdb",
+    ensemble="NPT",
+    temperature_k=300.0,
+    pressure_bar=1.0,
+    max_steps=1_000_000,
+)
+
+print(npt.successful, npt.termination_reason, npt.steps)
+print(npt.assessment.criteria)
+print(npt.assessment.metrics)
+print(npt.final_sample.density_g_ml)
+print(npt.final_sample.pressure_bar)
+```
+
+The simulation runs in blocks (`check_interval_steps=5000` by default). After
+each block, the default stability monitor checks a rolling window. NVT checks
+the mean temperature and the temperature and potential-energy trends. NPT also
+checks the relative box-volume trend and volume fluctuations. Several
+consecutive stable windows are required, so a single favorable sample does not
+stop the run. Instantaneous pressure is recorded for analysis but is not used
+as a hard criterion because its equilibrium fluctuations are large. If the
+criteria are not met, the run stops at `max_steps` and returns
+`successful=False` while still writing the final structure and retaining all
+sampled diagnostics.
+
+The tolerances can be changed with `EquilibrationCriteria`. For
+system-specific convergence definitions, pass a callback as `monitor`. It is
+called after every block with an `EquilibrationProgress` object:
+
+```python
+from biotools.mdtools import EquilibrationAssessment, equilibrate
+
+def monitor(progress):
+    if progress.current_step >= 100_000:
+        return EquilibrationAssessment(
+            stop=True,
+            successful=True,
+            reason="custom_criteria_met",
+            criteria={"custom": True},
+        )
+    return None
+
+result = equilibrate(
+    "minimized.pdb",
+    "equilibrated.pdb",
+    ensemble="NVT",
+    monitor=monitor,
+)
+```
+
 ## Logging
 
 The library uses Python's standard `logging` package and does not configure
