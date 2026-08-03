@@ -34,6 +34,7 @@ from .io import (
     save_structure_to_file,
 )
 from .visualization import plot_structure
+from .metadata import PDBMetadata, RCSBMetadataError, get_pdb_metadata
 
 __all__ = [
     "align_homologs",
@@ -56,10 +57,13 @@ __all__ = [
     "load_pdb_from_file",
     "map_three_to_one",
     "move_to_center",
+    "PDBMetadata",
     "plot_structure",
     "remove_wather_molecules",
     "rename_chain",
+    "RCSBMetadataError",
     "reset_index",
     "save_structure_to_file",
     "superimpose_PCA",
+    "get_pdb_metadata",
 ]

@@ -18,6 +18,8 @@ The `biotools.structure` package provides utilities to:
 
 - download structures from the Protein Data Bank, with automatic PDB-to-mmCIF
   fallback;
+- retrieve source organisms and deposition/release dates from the RCSB Data
+  API;
 - load and save PDB files and convert mmCIF structures to PDB;
 - extract, rename, trim, and safely renumber chains and residues;
 - obtain SEQRES records and amino-acid sequences;
@@ -106,6 +108,23 @@ PDB/`.ent` is the default download format and mmCIF is used as a fallback. To
 try mmCIF first, pass `prefer_mmcif=True`. The format-specific helpers
 `get_pdb_structure_as_pdb()` and `get_pdb_structure_as_mmcif()` are also
 available when no automatic fallback is desired.
+
+### Fetch RCSB entry metadata
+
+```python
+from biotools.pdbtools import get_pdb_metadata
+
+metadata = get_pdb_metadata("4HHB")
+
+print(metadata.pdb_id)       # 4HHB
+print(metadata.organisms)    # ("Homo sapiens",)
+print(metadata.deposited)    # datetime.date(1984, 3, 7)
+print(metadata.released)     # datetime.date(1984, 7, 17)
+```
+
+Organisms are the unique scientific source-organism names across the entry's
+polymer entities. Entries without a published initial release date return
+`released=None`.
 
 ### Align a complete structure from homologous chains
 
