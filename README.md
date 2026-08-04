@@ -57,7 +57,7 @@ hydrogens. `model_solvent()` adds pH-dependent hydrogens and explicit solvent;
 
 ## Requirements
 
-- Python 3.12 or newer
+- Python 3.11 or newer
 - Biopython
 - Biotite
 - NumPy
@@ -65,13 +65,9 @@ hydrogens. `model_solvent()` adds pH-dependent hydrogens and explicit solvent;
 - py3Dmol
 
 Local BLAST searches additionally require the NCBI BLAST+ executables
-`makeblastdb` and `blastp` to be available on `PATH`. OpenMM is required only
-when using `biotools.mdtools`. Install the molecular-dynamics dependencies
-from conda-forge:
-
-```bash
-conda install -c conda-forge openmm pdbfixer
-```
+`makeblastdb` and `blastp` to be available on `PATH`. The molecular-dynamics
+tools are optional and require OpenMM, PDBFixer, and the CUDA 12 support
+packages included in the `md` extra.
 
 ## Installation
 
@@ -83,11 +79,24 @@ cd biotools
 python -m pip install -e .
 ```
 
+This default installation omits the MD tools and their large CUDA
+dependencies. To include `biotools.mdtools`, install the optional `md` extra:
+
+```bash
+python -m pip install -e ".[md]"
+```
+
 With [uv](https://docs.astral.sh/uv/), the project environment can instead be
-created from the lockfile:
+created without MD support from the lockfile:
 
 ```bash
 uv sync
+```
+
+Add the optional MD dependencies with:
+
+```bash
+uv sync --extra md
 ```
 
 ## Quick start
