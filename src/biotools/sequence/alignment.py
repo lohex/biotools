@@ -125,6 +125,6 @@ def global_alignment_similarity(
         return 0.0
 
     similar_positions = sum(
-        1 for a, b in comparable_pairs if matrix[a, b] > 0
+        1 for a, b in comparable_pairs if matrix.get_score(a, b) > 0
     )
     return (similar_positions / len(comparable_pairs)) * 100
