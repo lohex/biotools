@@ -19,12 +19,14 @@ from .md_simulations.equilibration import (
 )
 from .md_simulations.minimization import (
     MinimizationResult,
+    MinimizationSample,
     _classify_minimization_termination,
     _get_raw_state_diagnostics,
     _IterationReporter,
     _should_restart_optimizer,
     minimize,
 )
+from .md_simulations.plotting import plot_md_result
 from .md_simulations.preparation import fix_pdb, model_solvent
 from .md_simulations.soft_equilibration import soft_equilibrate_nvt
 
@@ -37,11 +39,13 @@ __all__ = [
     "EquilibrationResult",
     "EquilibrationSample",
     "MinimizationResult",
+    "MinimizationSample",
     "MonitorCallback",
     "StabilityMonitor",
     "equilibrate",
     "fix_pdb",
     "minimize",
     "model_solvent",
+    "plot_md_result",
     "soft_equilibrate_nvt",
 ]

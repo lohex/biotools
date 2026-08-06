@@ -693,6 +693,18 @@ class ModelAndMinimizeTests(unittest.TestCase):
         self.assertEqual(result.delta_energy_kj_mol, -70.0)
         self.assertEqual(result.iterations, 2)
         self.assertEqual(result.optimizer_restarts, 1)
+        self.assertEqual(
+            [sample.iteration for sample in result.samples],
+            [1, 2],
+        )
+        self.assertEqual(
+            [sample.optimizer_attempt for sample in result.samples],
+            [0, 1],
+        )
+        self.assertEqual(
+            [sample.energy_kj_mol for sample in result.samples],
+            [20.0, 20.0],
+        )
         self.assertEqual(result.final_raw_rms_force_kj_mol_nm, 12.0)
         self.assertEqual(result.final_raw_max_force_kj_mol_nm, 18.0)
         self.assertEqual(result.final_rms_force_kj_mol_nm, 12.0)

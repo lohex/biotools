@@ -23,6 +23,19 @@ _MINIMIZER_CONSTRAINT_TOLERANCE_FLOOR = 1e-4
 
 
 @dataclass(frozen=True)
+class MinimizationSample:
+    """One sampled optimizer iteration during energy minimization."""
+
+    iteration: int
+    optimizer_attempt: int
+    energy_kj_mol: float
+    objective_rms_gradient_kj_mol_nm: float
+    restraint_energy_kj_mol: float
+    restraint_strength_kj_mol_nm2: float
+    max_constraint_error: float
+
+
+@dataclass(frozen=True)
 class MinimizationResult:
     """Summary of an OpenMM energy minimization."""
 
@@ -42,6 +55,7 @@ class MinimizationResult:
     max_iterations: int
     converged: bool
     termination_reason: str
+    samples: tuple[MinimizationSample, ...] = ()
 
     @property
     def initial_rms_force_kj_mol_nm(self) -> float:
@@ -233,6 +247,7 @@ def minimize(
     )
     total_iterations = 0
     optimizer_restarts = 0
+    samples: list[MinimizationSample] = []
     while True:
         reporter = _IterationReporter(
             system.getNumParticles(),
@@ -243,6 +258,24 @@ def minimize(
             tolerance=tolerance_kj_mol_nm * kilojoule_per_mole / nanometer,
             maxIterations=max_iterations,
             reporter=reporter,
+        )
+        samples.extend(
+            MinimizationSample(
+                iteration=total_iterations + index + 1,
+                optimizer_attempt=optimizer_restarts,
+                energy_kj_mol=float(report["energy_kj_mol"]),
+                objective_rms_gradient_kj_mol_nm=float(
+                    report["objective_rms_gradient_kj_mol_nm"]
+                ),
+                restraint_energy_kj_mol=float(
+                    report["restraint_energy_kj_mol"]
+                ),
+                restraint_strength_kj_mol_nm2=float(
+                    report["restraint_strength_kj_mol_nm2"]
+                ),
+                max_constraint_error=float(report["max_constraint_error"]),
+            )
+            for index, report in enumerate(reporter.history)
         )
         total_iterations += len(reporter.history)
         converged, termination_reason = _classify_minimization_termination(
@@ -329,4 +362,5 @@ def minimize(
         max_iterations=max_iterations,
         converged=converged,
         termination_reason=termination_reason,
+        samples=tuple(samples),
     )

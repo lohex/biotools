@@ -14,6 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 md = [
+    "matplotlib>=3.10.0",
     "openmm[cuda12]>=8.5.2",
     "pdbfixer>=1.12.0",
 ]

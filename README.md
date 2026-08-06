@@ -66,8 +66,8 @@ hydrogens. `model_solvent()` adds pH-dependent hydrogens and explicit solvent;
 
 Local BLAST searches additionally require the NCBI BLAST+ executables
 `makeblastdb` and `blastp` to be available on `PATH`. The molecular-dynamics
-tools are optional and require OpenMM, PDBFixer, and the CUDA 12 support
-packages included in the `md` extra.
+tools are optional and require OpenMM, PDBFixer, Matplotlib, and the CUDA 12
+support packages included in the `md` extra.
 
 ## Installation
 
@@ -252,6 +252,9 @@ print(result.termination_reason)
 print(result.converged)
 ```
 
+With diagnostics enabled, the minimizer also retains the energy and objective
+RMS-gradient history for plotting.
+
 Restarts only occur for `optimizer_stopped` with satisfied constraints and an
 objective RMS gradient above the requested tolerance. They are not attempted
 after `max_iterations`, for unsatisfied constraints, or after convergence. The
@@ -299,6 +302,27 @@ print(npt.final_sample.density_g_ml)
 print(npt.final_sample.pressure_bar)
 print(npt.state_path, npt.checkpoint_path)
 ```
+
+### Plot minimization and equilibration diagnostics
+
+The optional `md` dependencies include Matplotlib. `plot_md_result()` creates
+energy and objective-gradient plots for a minimization result. For an
+equilibration result it creates temperature and energy plots, plus pressure for
+NPT data:
+
+```python
+from biotools.mdtools import plot_md_result
+
+min_figure, min_axes = plot_md_result(result)
+min_figure.savefig("minimization.png", dpi=150)
+
+npt_figure, npt_axes = plot_md_result(npt)
+npt_figure.savefig("npt-equilibration.png", dpi=150)
+```
+
+The function returns the Matplotlib figure and axes without calling `show()`,
+so notebooks, scripts, and GUI applications can decide how to display or save
+the plot.
 
 `soft_equilibrate_nvt()` starts by assigning velocities at the lower initial
 temperature. It linearly increases both thermostat temperature and integrator
