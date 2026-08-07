@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=2.3.5",
     "pandas>=3.0.3",
     "py3dmol>=2.5.3",
+    "pytest>=9.1.1",
 ]
 
 [project.optional-dependencies]

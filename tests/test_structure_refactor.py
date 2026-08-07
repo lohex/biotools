@@ -13,6 +13,7 @@ from biotools import pdbtools
 from biotools.structure import io as structure_io
 from biotools.structure import (
     align_homologs,
+    characterize_chain_contacts,
     clip_chain,
     get_interaction_residues,
     get_interaction_residues_full,
@@ -161,6 +162,32 @@ class StructureRefactorTests(unittest.TestCase):
         )
 
         self.assertEqual(neighbor_result, full_result)
+
+    def test_characterize_chain_contacts_detects_vdw_between_chains(self) -> None:
+        structure = _structure(
+            {
+                "A": [(0, 0, 0)],
+                "B": [(3.0, 0, 0)],
+            }
+        )
+        result = characterize_chain_contacts(structure, "A", "B", atomic=True)
+        self.assertTrue(any(record["interaction_type"] == "van_der_waals_contact" for record in result))
+
+    def test_characterize_chain_contacts_can_disable_contact_types(self) -> None:
+        structure = _structure(
+            {
+                "A": [(0, 0, 0)],
+                "B": [(3.0, 0, 0)],
+            }
+        )
+        result = characterize_chain_contacts(
+            structure,
+            "A",
+            "B",
+            atomic=True,
+            van_der_waals_contact=False,
+        )
+        self.assertFalse(any(record["interaction_type"] == "van_der_waals_contact" for record in result))
 
     @patch("biotools.structure.io.get_pdb_structure_as_mmcif")
     @patch("biotools.structure.io.get_pdb_structure_as_pdb")

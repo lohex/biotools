@@ -26,6 +26,7 @@ The `biotools.structure` package provides utilities to:
 - calculate RMSD and superimpose complete structures;
 - align complete target structures from homologous chain correspondences;
 - identify residue contacts between chains;
+- assign secondary structure and solvent accessibility with DSSP;
 - center structures or orient them along their principal axes; and
 - create interactive `py3Dmol` structure views.
 
@@ -65,9 +66,11 @@ hydrogens. `model_solvent()` adds pH-dependent hydrogens and explicit solvent;
 - py3Dmol
 
 Local BLAST searches additionally require the NCBI BLAST+ executables
-`makeblastdb` and `blastp` to be available on `PATH`. The molecular-dynamics
-tools are optional and require OpenMM, PDBFixer, Matplotlib, and the CUDA 12
-support packages included in the `md` extra.
+`makeblastdb` and `blastp` to be available on `PATH`. Secondary-structure
+assignment requires DSSP to be installed, with either the `dssp` or `mkdssp`
+executable available on `PATH`. The molecular-dynamics tools are optional and
+require OpenMM, PDBFixer, Matplotlib, and the CUDA 12 support packages included
+in the `md` extra.
 
 ## Installation
 
@@ -134,6 +137,25 @@ print(metadata.released)     # datetime.date(1984, 7, 17)
 Organisms are the unique scientific source-organism names across the entry's
 polymer entities. Entries without a published initial release date return
 `released=None`.
+
+### Assign secondary structure with DSSP
+
+DSSP must be installed separately and exposed as `dssp` or `mkdssp` on
+`PATH`. The function accepts PDB and mmCIF files:
+
+```python
+from biotools.structure import assign_secondary_structure
+
+dssp = assign_secondary_structure("protein.pdb")
+
+for residue in dssp.residues:
+    print(
+        residue.chain_id,
+        residue.residue_id,
+        residue.secondary_structure,
+        residue.relative_accessibility,
+    )
+```
 
 ### Align a complete structure from homologous chains
 

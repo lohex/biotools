@@ -16,6 +16,7 @@ from .chains import (
     reset_index,
 )
 from .geometry import (
+    characterize_chain_contacts,
     get_interaction_residues,
     get_interaction_residues_full,
     get_min_dist,
@@ -35,16 +36,28 @@ from .io import (
 )
 from .visualization import plot_structure
 from .metadata import PDBMetadata, RCSBMetadataError, get_pdb_metadata
+from .secondary_structure import (
+    AccessibilityScale,
+    assign_secondary_structure,
+    DSSPResidue,
+    DSSPResult,
+    ResidueID,
+)
 
 __all__ = [
+    "AccessibilityScale",
     "align_homologs",
     "align_structure",
     "apply_transformation",
+    "assign_secondary_structure",
     "clip_chain",
     "convert_cif_to_pdb",
+    "DSSPResidue",
+    "DSSPResult",
     "extract_chain",
     "get_aa_sequence",
     "get_alignment",
+    "characterize_chain_contacts",
     "get_interaction_residues",
     "get_interaction_residues_full",
     "get_min_dist",
@@ -61,6 +74,7 @@ __all__ = [
     "plot_structure",
     "remove_wather_molecules",
     "rename_chain",
+    "ResidueID",
     "RCSBMetadataError",
     "reset_index",
     "save_structure_to_file",
