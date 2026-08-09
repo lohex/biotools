@@ -25,7 +25,7 @@ The `biotools.structure` package provides utilities to:
 - obtain SEQRES records and amino-acid sequences;
 - calculate RMSD and superimpose complete structures;
 - align complete target structures from homologous chain correspondences;
-- identify residue contacts between chains;
+- identify and geometrically characterize residue contacts between chains;
 - assign secondary structure and solvent accessibility with DSSP;
 - center structures or orient them along their principal axes; and
 - create interactive `py3Dmol` structure views.
@@ -70,7 +70,8 @@ Local BLAST searches additionally require the NCBI BLAST+ executables
 assignment requires DSSP to be installed, with either the `dssp` or `mkdssp`
 executable available on `PATH`. The molecular-dynamics tools are optional and
 require OpenMM, PDBFixer, Matplotlib, and the CUDA 12 support packages included
-in the `md` extra.
+in the `md` extra. OpenMM-backed contact topology without CUDA is available
+through the separate `contacts` extra.
 
 ## Installation
 
@@ -83,10 +84,25 @@ python -m pip install -e .
 ```
 
 This default installation omits the MD tools and their large CUDA
-dependencies. To include `biotools.mdtools`, install the optional `md` extra:
+dependencies. Contact characterization uses built-in protein bond templates by
+default. Install the optional `contacts` extra to enable the OpenMM topology
+backend without CUDA:
+
+```bash
+python -m pip install -e ".[contacts]"
+```
+
+To include `biotools.mdtools`, install the optional `md` extra:
 
 ```bash
 python -m pip install -e ".[md]"
+```
+
+Both optional feature sets can be installed together. The package manager
+merges the shared OpenMM requirement and installs it only once:
+
+```bash
+python -m pip install -e ".[md,contacts]"
 ```
 
 With [uv](https://docs.astral.sh/uv/), the project environment can instead be
@@ -100,6 +116,13 @@ Add the optional MD dependencies with:
 
 ```bash
 uv sync --extra md
+```
+
+For OpenMM contact topology, or both optional feature sets, use:
+
+```bash
+uv sync --extra contacts
+uv sync --extra md --extra contacts
 ```
 
 ## Quick start
@@ -178,6 +201,36 @@ from biotools.structure import rename_chain, reset_index
 # Simultaneous swaps and chained renames are handled without ID collisions.
 rename_chain(structure, {"A": "B", "B": "A"})
 reset_index(structure)
+```
+
+### Characterize contacts between protein chains
+
+The default topology backend uses built-in protein bond templates and requires
+no optional dependencies:
+
+```python
+from biotools.structure import characterize_chain_contacts
+
+contacts = characterize_chain_contacts(
+    structure,
+    "A",
+    "B",
+    atomic=False,
+    topology_backend="templates",
+)
+```
+
+After installing `biotools[contacts]`, OpenMM can provide the standard bond
+topology and disulfide assignments. The backend is selected explicitly so that
+results do not depend on which optional packages happen to be installed:
+
+```python
+contacts = characterize_chain_contacts(
+    structure,
+    "A",
+    "B",
+    topology_backend="openmm",
+)
 ```
 
 ### Compare protein sequences

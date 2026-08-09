@@ -63,14 +63,13 @@ except ModuleNotFoundError as exc:
     pdbfixer_module.PDBFixer = MagicMock()
     openmm_module.app = openmm_app_module
     openmm_module.unit = openmm_unit_module
-    sys.modules.update(
-        {
-            "openmm": openmm_module,
-            "openmm.app": openmm_app_module,
-            "openmm.unit": openmm_unit_module,
-            "pdbfixer": pdbfixer_module,
-        }
-    )
+    for module_name, module in {
+        "openmm": openmm_module,
+        "openmm.app": openmm_app_module,
+        "openmm.unit": openmm_unit_module,
+        "pdbfixer": pdbfixer_module,
+    }.items():
+        sys.modules.setdefault(module_name, module)
     from biotools.mdtools import (
         MinimizationResult,
         _IterationReporter,
