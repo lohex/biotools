@@ -27,6 +27,7 @@ The `biotools.structure` package provides utilities to:
 - align complete target structures from homologous chain correspondences;
 - identify and geometrically characterize residue contacts between chains;
 - assign secondary structure and solvent accessibility with DSSP;
+- calculate solvent accessibility and interaction surfaces with FreeSASA;
 - center structures or orient them along their principal axes; and
 - create interactive `py3Dmol` structure views.
 
@@ -68,10 +69,12 @@ hydrogens. `model_solvent()` adds pH-dependent hydrogens and explicit solvent;
 Local BLAST searches additionally require the NCBI BLAST+ executables
 `makeblastdb` and `blastp` to be available on `PATH`. Secondary-structure
 assignment requires DSSP to be installed, with either the `dssp` or `mkdssp`
-executable available on `PATH`. The molecular-dynamics tools are optional and
-require OpenMM, PDBFixer, Matplotlib, and the CUDA 12 support packages included
-in the `md` extra. OpenMM-backed contact topology without CUDA is available
-through the separate `contacts` extra.
+executable available on `PATH`. SASA and interaction-surface analysis require
+FreeSASA with the `freesasa` executable available on `PATH`. The
+molecular-dynamics tools are optional and require OpenMM, PDBFixer, Matplotlib,
+and the CUDA 12 support packages included in the `md` extra. OpenMM-backed
+contact topology without CUDA is available through the separate `contacts`
+extra.
 
 ## Installation
 
@@ -191,6 +194,64 @@ in the same order; absolute SASA is reported in Å². Some generated PDB files,
 including files produced by PeptideBuilder, omit the records expected by DSSP.
 When necessary, biotools passes DSSP a temporary copy with compatibility
 `HEADER` and `CRYST1` records. The original PDB file is not modified.
+
+### Calculate SASA and interaction surfaces with FreeSASA
+
+FreeSASA provides a focused SASA calculation without running DSSP's secondary-
+structure analysis. Install FreeSASA separately and ensure that its `freesasa`
+executable is available on `PATH`:
+
+```python
+from biotools.structure import calculate_sasa
+
+sasa = calculate_sasa(structure)
+
+print(sasa.total_absolute_sasa)
+print(sasa.chain_absolute_sasa)
+for residue in sasa.residues:
+    print(
+        residue.chain_id,
+        residue.residue_id,
+        residue.absolute_sasa,
+        residue.relative_sasa,
+    )
+```
+
+Absolute values are reported in Å². Relative residue values are fractions, so
+`1.0` corresponds to 100% of FreeSASA's reference accessibility. They may be
+larger than `1.0` for unusually exposed residue conformations.
+
+`analyze_interaction_surface()` compares each selected chain in isolation with
+the same chain in the two-chain complex:
+
+```python
+from biotools.structure import analyze_interaction_surface
+
+surface = analyze_interaction_surface(
+    structure,
+    "A",
+    "B",
+    per_residue_scores=True,
+    relative_sasa=True,
+    absolute_sasa=True,
+)
+
+print(surface.total)
+print(surface.chain_scores["A"])
+print(surface.chain_scores["B"])
+print(surface.per_residue_scores)
+```
+
+For every enabled level, `delta_sasa_absolute` is
+`sasa_separated - sasa_complex`. `delta_sasa_relative` is this difference
+divided by `sasa_separated`, i.e. the fraction of the originally accessible
+surface buried upon complex formation. The total delta is the two-sided buried
+surface; the conventional interface area is half this value. The analysis uses
+copies produced by `extract_chain()` and removes water and other hetero
+residues before calculating the isolated chains and their shared complex. The
+input structure is not modified. Set `per_residue_scores=False` to omit residue
+records, or disable relative or absolute output independently with the
+corresponding flags.
 
 ### Align a complete structure from homologous chains
 
