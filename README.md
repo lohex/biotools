@@ -177,8 +177,20 @@ for residue in dssp.residues:
         residue.residue_id,
         residue.secondary_structure,
         residue.relative_accessibility,
+        residue.absolute_accessibility,
     )
+
+print(dssp.secondary_structure)
+print(dssp.relative_sasa)
+print(dssp.absolute_sasa)
 ```
+
+`secondary_structure` concatenates the DSSP assignments for all returned
+residues. `relative_sasa` and `absolute_sasa` contain the corresponding values
+in the same order; absolute SASA is reported in Å². Some generated PDB files,
+including files produced by PeptideBuilder, omit the records expected by DSSP.
+When necessary, biotools passes DSSP a temporary copy with compatibility
+`HEADER` and `CRYST1` records. The original PDB file is not modified.
 
 ### Align a complete structure from homologous chains
 
