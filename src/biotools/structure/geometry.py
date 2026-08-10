@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, TYPE_CHECKING, TypeAlias
+from typing import Any, cast, Literal, TYPE_CHECKING, TypeAlias
 
 import numpy as np
 from numpy.typing import NDArray
 from Bio.PDB import NeighborSearch
 from Bio.PDB.Polypeptide import is_aa
 from Bio.PDB.vectors import Vector
-
-from .chains import extract_chain
 
 if TYPE_CHECKING:
     from Bio.PDB.Residue import Residue
@@ -20,6 +18,19 @@ if TYPE_CHECKING:
 ResidueCoordinates: TypeAlias = tuple[int, str, list[Vector]]
 InteractionRecord: TypeAlias = list[int | str | float]
 FloatArray: TypeAlias = NDArray[np.floating[Any]]
+DistanceMetric: TypeAlias = Literal[
+    "c_alpha",
+    "c_beta",
+    "min_heavy_atom",
+    "min_atom",
+]
+
+_DISTANCE_METRICS = {
+    "c_alpha",
+    "c_beta",
+    "min_heavy_atom",
+    "min_atom",
+}
 
 
 def get_residue_coords(
@@ -80,11 +91,61 @@ def get_min_dist(
     return float(min_dist)
 
 
+def _validate_distance_metric(distance_metric: str) -> DistanceMetric:
+    if distance_metric not in _DISTANCE_METRICS:
+        choices = ", ".join(sorted(_DISTANCE_METRICS))
+        raise ValueError(
+            f"Unsupported distance_metric {distance_metric!r}; choose from "
+            f"{choices}"
+        )
+    return cast(DistanceMetric, distance_metric)
+
+
+def _is_heavy_atom(atom: Any) -> bool:
+    element = (getattr(atom, "element", None) or "").strip().upper()
+    if element:
+        return element not in {"H", "D"}
+    atom_name = atom.get_name().strip().upper()
+    return not atom_name.startswith(("H", "D"))
+
+
+def _distance_atoms(
+    residue: Residue,
+    distance_metric: DistanceMetric,
+) -> list[Any]:
+    if distance_metric == "c_alpha":
+        return [residue["CA"]] if residue.has_id("CA") else []
+    if distance_metric == "c_beta":
+        atom_name = "CA" if residue.get_resname().upper() == "GLY" else "CB"
+        return [residue[atom_name]] if residue.has_id(atom_name) else []
+
+    atoms = list(residue.get_atoms())
+    if distance_metric == "min_heavy_atom":
+        return [atom for atom in atoms if _is_heavy_atom(atom)]
+    return atoms
+
+
+def _chain_residues(
+    structure: Structure,
+    chain_id: str,
+) -> list[Residue]:
+    chains = [chain for chain in structure.get_chains() if chain.id == chain_id]
+    if not chains:
+        raise ValueError(f"Chain {chain_id!r} not found in structure")
+    return [
+        residue
+        for chain in chains
+        for residue in chain.get_residues()
+        if is_aa(residue)
+    ]
+
+
 def get_interaction_residues_full(
     struc: Structure,
     chain_a: str,
     chain_b: str,
     cutoff: float = 5.0,
+    distance_metric: DistanceMetric = "min_heavy_atom",
 ) -> list[InteractionRecord]:
     """Find interacting residues using a full pairwise distance search.
 
@@ -95,23 +156,50 @@ def get_interaction_residues_full(
         struc: Structure containing both requested chains.
         chain_a: ID of the first interacting chain.
         chain_b: ID of the second interacting chain.
-        cutoff: Maximum atom-to-atom contact distance in angstroms.
+        cutoff: Maximum distance in angstroms. C-alpha and C-beta metrics
+            commonly use a larger cutoff, such as 8 angstroms.
+        distance_metric: Residue distance definition. ``"c_alpha"`` uses
+            C-alpha atoms, ``"c_beta"`` uses C-beta atoms with a C-alpha
+            fallback for glycine, ``"min_heavy_atom"`` uses the minimum
+            non-hydrogen atom distance, and ``"min_atom"`` retains the former
+            all-atom behavior.
 
     Returns:
         Contact records containing residue numbers, residue names, and minimum
         atom-to-atom distances.
 
     Raises:
-        Exception: If either requested chain does not exist.
+        ValueError: If a requested chain or distance metric is invalid.
     """
-    atoms_a = get_residue_coords(extract_chain(struc, chain_a))
-    atoms_b = get_residue_coords(extract_chain(struc, chain_b))
+    distance_metric = _validate_distance_metric(distance_metric)
+    residues_a = _chain_residues(struc, chain_a)
+    residues_b = _chain_residues(struc, chain_b)
     interactions = []
-    for res_a, type_a, vectors_a in atoms_a:
-        for res_b, type_b, vectors_b in atoms_b:
+    for residue_a in residues_a:
+        vectors_a = [
+            atom.get_vector()
+            for atom in _distance_atoms(residue_a, distance_metric)
+        ]
+        if not vectors_a:
+            continue
+        for residue_b in residues_b:
+            vectors_b = [
+                atom.get_vector()
+                for atom in _distance_atoms(residue_b, distance_metric)
+            ]
+            if not vectors_b:
+                continue
             distance = get_min_dist(vectors_a, vectors_b)
             if distance <= cutoff:
-                interactions.append([res_a, type_a, res_b, type_b, distance])
+                interactions.append(
+                    [
+                        residue_a.id[1],
+                        residue_a.get_resname(),
+                        residue_b.id[1],
+                        residue_b.get_resname(),
+                        distance,
+                    ]
+                )
     return interactions
 
 
@@ -120,57 +208,63 @@ def get_interaction_residues(
     chain_a: str,
     chain_b: str,
     cutoff: float = 5.0,
+    distance_metric: DistanceMetric = "min_heavy_atom",
 ) -> list[InteractionRecord]:
     """Find interacting residues using a KD-tree neighbor search.
 
     All amino-acid residues from chains with the requested IDs are considered.
-    For each residue pair with at least one atom pair inside ``cutoff``, the
-    smallest atom-to-atom distance is returned.
+    For each residue pair with a selected atom pair inside ``cutoff``, the
+    smallest distance according to ``distance_metric`` is returned.
 
     Args:
         struc: Structure containing both requested chains.
         chain_a: ID of the first interacting chain.
         chain_b: ID of the second interacting chain.
-        cutoff: Maximum atom-to-atom contact distance in angstroms.
+        cutoff: Maximum distance in angstroms. C-alpha and C-beta metrics
+            commonly use a larger cutoff, such as 8 angstroms.
+        distance_metric: Residue distance definition. ``"c_alpha"`` uses
+            C-alpha atoms, ``"c_beta"`` uses C-beta atoms with a C-alpha
+            fallback for glycine, ``"min_heavy_atom"`` uses the minimum
+            non-hydrogen atom distance, and ``"min_atom"`` retains the former
+            all-atom behavior.
 
     Returns:
         Contact records containing residue numbers, residue names, and minimum
         atom-to-atom distances.
 
     Raises:
-        ValueError: If either requested chain does not exist.
+        ValueError: If a requested chain or distance metric is invalid.
     """
-    chains_a = [chain for chain in struc.get_chains() if chain.id == chain_a]
-    chains_b = [chain for chain in struc.get_chains() if chain.id == chain_b]
-    if not chains_a:
-        raise ValueError(f"Chain {chain_a!r} not found in structure")
-    if not chains_b:
-        raise ValueError(f"Chain {chain_b!r} not found in structure")
-
-    residues_a = [
-        residue
-        for chain in chains_a
-        for residue in chain.get_residues()
-        if is_aa(residue)
-    ]
-    residues_b = [
-        residue
-        for chain in chains_b
-        for residue in chain.get_residues()
-        if is_aa(residue)
-    ]
+    distance_metric = _validate_distance_metric(distance_metric)
+    residues_a = _chain_residues(struc, chain_a)
+    residues_b = _chain_residues(struc, chain_b)
 
     if not residues_a or not residues_b:
         return []
 
-    atoms_b = [atom for residue in residues_b for atom in residue.get_atoms()]
+    atoms_by_residue_b = {
+        residue: _distance_atoms(residue, distance_metric)
+        for residue in residues_b
+    }
+    atoms_b = [
+        atom
+        for residue in residues_b
+        for atom in atoms_by_residue_b[residue]
+    ]
+    if not atoms_b:
+        return []
+    atom_residues_b = {
+        id(atom): residue
+        for residue, atoms in atoms_by_residue_b.items()
+        for atom in atoms
+    }
     neighbor_search = NeighborSearch(atoms_b)
     min_distances: dict[tuple[Residue, Residue], float] = {}
 
     for residue_a in residues_a:
-        for atom_a in residue_a.get_atoms():
+        for atom_a in _distance_atoms(residue_a, distance_metric):
             for atom_b in neighbor_search.search(atom_a.coord, cutoff, level="A"):
-                residue_b = atom_b.get_parent()
+                residue_b = atom_residues_b[id(atom_b)]
                 key = (residue_a, residue_b)
                 distance = atom_a - atom_b
                 if key not in min_distances or distance < min_distances[key]:
@@ -303,6 +397,65 @@ def characterize_chain_contacts(
         chain_a,
         chain_b,
         atomic=atomic,
+        hydrogen_bond=hydrogen_bond,
+        salt_bridge=salt_bridge,
+        hydrophobic_contact=hydrophobic_contact,
+        van_der_waals_contact=van_der_waals_contact,
+        pi_stacking_parallel=pi_stacking_parallel,
+        cation_pi_candidate=cation_pi_candidate,
+        water_bridge=water_bridge,
+        pi_stacking_t_shaped=pi_stacking_t_shaped,
+        topology_backend=topology_backend,
+    )
+
+
+def characterize_intrachain_contacts(
+    structure: Structure,
+    chain: str,
+    *,
+    min_sequence_separation: int = 2,
+    hydrogen_bond: bool = True,
+    salt_bridge: bool = True,
+    hydrophobic_contact: bool = True,
+    van_der_waals_contact: bool = True,
+    pi_stacking_parallel: bool = True,
+    cation_pi_candidate: bool = True,
+    water_bridge: bool = True,
+    pi_stacking_t_shaped: bool = True,
+    topology_backend: str = "templates",
+) -> list[dict[str, Any]]:
+    """Characterize noncovalent interactions within one protein chain.
+
+    Residue pairs are unique and oriented in chain order. Self-pairs and pairs
+    closer than ``min_sequence_separation`` positions in the chain are omitted.
+    The default value of two therefore excludes directly adjacent residues.
+
+    Args:
+        structure: Biopython structure containing the requested chain.
+        chain: Chain identifier.
+        min_sequence_separation: Minimum difference between residue indices.
+        hydrogen_bond: Include direct hydrogen bonds.
+        salt_bridge: Include salt bridges.
+        hydrophobic_contact: Include conservative hydrophobic contacts.
+        van_der_waals_contact: Include heavy-atom van der Waals contacts.
+        pi_stacking_parallel: Include parallel pi-stacking candidates.
+        cation_pi_candidate: Include cation-pi candidates.
+        water_bridge: Include bridges mediated by the same explicit water.
+        pi_stacking_t_shaped: Include T-shaped pi-stacking candidates.
+        topology_backend: Built-in ``"templates"`` or optional ``"openmm"``.
+
+    Returns:
+        One representative record per residue pair and interaction type.
+
+    Raises:
+        ValueError: If the chain, model, separation, or backend is invalid.
+    """
+    from ._contacts import characterize_intrachain_contacts_impl
+
+    return characterize_intrachain_contacts_impl(
+        structure,
+        chain,
+        min_sequence_separation=min_sequence_separation,
         hydrogen_bond=hydrogen_bond,
         salt_bridge=salt_bridge,
         hydrophobic_contact=hydrophobic_contact,

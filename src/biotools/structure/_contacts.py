@@ -745,9 +745,11 @@ def _record(
         "interaction_type": observation.interaction_type,
         "chain_a": chain_a,
         "chain_b": chain_b,
+        "residue_a_id": observation.residue_a.id,
         "residue_a_num": observation.residue_a.id[1],
         "residue_a_name": observation.residue_a.get_resname(),
         "atom_a": observation.atom_a,
+        "residue_b_id": observation.residue_b.id,
         "residue_b_num": observation.residue_b.id[1],
         "residue_b_name": observation.residue_b.get_resname(),
         "atom_b": observation.atom_b,
@@ -794,6 +796,173 @@ def _aggregate(observations: list[_Observation]) -> list[_Observation]:
     return result
 
 
+def _detect_contact_observations(
+    model: Model,
+    residues_a: list[Residue],
+    residues_b: list[Residue],
+    *,
+    hydrogen_bond: bool,
+    salt_bridge: bool,
+    hydrophobic_contact: bool,
+    van_der_waals_contact: bool,
+    pi_stacking_parallel: bool,
+    cation_pi_candidate: bool,
+    water_bridge: bool,
+    pi_stacking_t_shaped: bool,
+    topology_backend: str,
+) -> list[_Observation]:
+    atoms_a = [atom for residue in residues_a for atom in residue.get_atoms()]
+    atoms_b = [atom for residue in residues_b for atom in residue.get_atoms()]
+    water_residues = [
+        residue
+        for chain in model
+        for residue in chain
+        if _residue_name(residue) in WATER_RESIDUE_NAMES
+    ]
+    topology_residues = list(
+        dict.fromkeys(
+            residues_a
+            + residues_b
+            + (water_residues if water_bridge else [])
+        )
+    )
+    adjacency = _build_bond_adjacency(
+        model,
+        topology_residues,
+        topology_backend,
+    )
+
+    include_charged = salt_bridge or cation_pi_candidate
+    groups_a = _charged_groups(residues_a, adjacency) if include_charged else []
+    groups_b = _charged_groups(residues_b, adjacency) if include_charged else []
+    include_aromatic = (
+        pi_stacking_parallel or pi_stacking_t_shaped or cation_pi_candidate
+    )
+    rings_a = _aromatic_rings(residues_a) if include_aromatic else []
+    rings_b = _aromatic_rings(residues_b) if include_aromatic else []
+
+    observations: list[_Observation] = []
+    if hydrogen_bond:
+        observations.extend(_hydrogen_bonds(atoms_a, atoms_b, adjacency))
+    if salt_bridge:
+        observations.extend(_salt_bridges(groups_a, groups_b))
+    if hydrophobic_contact:
+        observations.extend(_hydrophobic_contacts(atoms_a, atoms_b, adjacency))
+    if van_der_waals_contact:
+        observations.extend(_vdw_contacts(atoms_a, atoms_b))
+    if include_aromatic:
+        observations.extend(
+            _aromatic_interactions(
+                rings_a,
+                rings_b,
+                groups_a,
+                groups_b,
+                pi_stacking_parallel,
+                pi_stacking_t_shaped,
+                cation_pi_candidate,
+            )
+        )
+    if water_bridge:
+        observations.extend(
+            _water_bridges(
+                atoms_a,
+                atoms_b,
+                water_residues,
+                adjacency,
+            )
+        )
+    return observations
+
+
+def _select_model_and_chain(
+    structure: Structure,
+    chain_id: str,
+) -> tuple[Model, Chain]:
+    matches = [model for model in structure if chain_id in model]
+    if not matches:
+        raise ValueError(f"Chain {chain_id!r} not found in structure")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Chain {chain_id!r} occurs in multiple models; select one model "
+            "before characterizing intrachain contacts"
+        )
+    model = matches[0]
+    return model, model[chain_id]
+
+
+def characterize_intrachain_contacts_impl(
+    structure: Structure,
+    chain: str,
+    *,
+    min_sequence_separation: int = 2,
+    hydrogen_bond: bool = True,
+    salt_bridge: bool = True,
+    hydrophobic_contact: bool = True,
+    van_der_waals_contact: bool = True,
+    pi_stacking_parallel: bool = True,
+    cation_pi_candidate: bool = True,
+    water_bridge: bool = True,
+    pi_stacking_t_shaped: bool = True,
+    topology_backend: str = "templates",
+) -> list[dict[str, Any]]:
+    """Characterize unique noncovalent residue pairs within one chain."""
+    if (
+        isinstance(min_sequence_separation, bool)
+        or not isinstance(min_sequence_separation, int)
+        or min_sequence_separation < 1
+    ):
+        raise ValueError("min_sequence_separation must be an integer >= 1")
+
+    model, chain_object = _select_model_and_chain(structure, chain)
+    residues = [
+        residue
+        for residue in chain_object.get_residues()
+        if _is_protein_residue(residue)
+    ]
+    residue_order = {residue: index for index, residue in enumerate(residues)}
+    observations = _detect_contact_observations(
+        model,
+        residues,
+        residues,
+        hydrogen_bond=hydrogen_bond,
+        salt_bridge=salt_bridge,
+        hydrophobic_contact=hydrophobic_contact,
+        van_der_waals_contact=van_der_waals_contact,
+        pi_stacking_parallel=pi_stacking_parallel,
+        cation_pi_candidate=cation_pi_candidate,
+        water_bridge=water_bridge,
+        pi_stacking_t_shaped=pi_stacking_t_shaped,
+        topology_backend=topology_backend,
+    )
+
+    normalized = []
+    for observation in observations:
+        index_a = residue_order.get(observation.residue_a)
+        index_b = residue_order.get(observation.residue_b)
+        if index_a is None or index_b is None:
+            continue
+        if abs(index_a - index_b) < min_sequence_separation:
+            continue
+        if index_a > index_b:
+            observation = _Observation(
+                observation.interaction_type,
+                observation.residue_b,
+                observation.residue_a,
+                observation.atom_b,
+                observation.atom_a,
+                observation.distance,
+                observation.angle,
+                observation.geometry,
+                observation.mediator,
+            )
+        normalized.append(observation)
+
+    return [
+        _record(structure, chain, chain, observation)
+        for observation in _aggregate(normalized)
+    ]
+
+
 def characterize_chain_contacts_impl(
     structure: Structure,
     chain_a: str,
@@ -821,46 +990,20 @@ def characterize_chain_contacts_impl(
         for residue in chain_object_b.get_residues()
         if _is_protein_residue(residue)
     ]
-    atoms_a = [atom for residue in residues_a for atom in residue.get_atoms()]
-    atoms_b = [atom for residue in residues_b for atom in residue.get_atoms()]
-    water_residues = [
-        residue
-        for chain in model
-        for residue in chain
-        if _residue_name(residue) in WATER_RESIDUE_NAMES
-    ]
-    adjacency = _build_bond_adjacency(
+    observations = _detect_contact_observations(
         model,
-        residues_a + residues_b + (water_residues if water_bridge else []),
-        topology_backend,
+        residues_a,
+        residues_b,
+        hydrogen_bond=hydrogen_bond,
+        salt_bridge=salt_bridge,
+        hydrophobic_contact=hydrophobic_contact,
+        van_der_waals_contact=van_der_waals_contact,
+        pi_stacking_parallel=pi_stacking_parallel,
+        cation_pi_candidate=cation_pi_candidate,
+        water_bridge=water_bridge,
+        pi_stacking_t_shaped=pi_stacking_t_shaped,
+        topology_backend=topology_backend,
     )
-
-    groups_a = _charged_groups(residues_a, adjacency) if salt_bridge or cation_pi_candidate else []
-    groups_b = _charged_groups(residues_b, adjacency) if salt_bridge or cation_pi_candidate else []
-    include_aromatic = (
-        pi_stacking_parallel or pi_stacking_t_shaped or cation_pi_candidate
-    )
-    rings_a = _aromatic_rings(residues_a) if include_aromatic else []
-    rings_b = _aromatic_rings(residues_b) if include_aromatic else []
-
-    observations: list[_Observation] = []
-    if hydrogen_bond:
-        observations.extend(_hydrogen_bonds(atoms_a, atoms_b, adjacency))
-    if salt_bridge:
-        observations.extend(_salt_bridges(groups_a, groups_b))
-    if hydrophobic_contact:
-        observations.extend(_hydrophobic_contacts(atoms_a, atoms_b, adjacency))
-    if van_der_waals_contact:
-        observations.extend(_vdw_contacts(atoms_a, atoms_b))
-    if include_aromatic:
-        observations.extend(
-            _aromatic_interactions(
-                rings_a, rings_b, groups_a, groups_b,
-                pi_stacking_parallel, pi_stacking_t_shaped, cation_pi_candidate,
-            )
-        )
-    if water_bridge:
-        observations.extend(_water_bridges(atoms_a, atoms_b, water_residues, adjacency))
 
     if not atomic:
         observations = _aggregate(observations)

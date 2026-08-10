@@ -17,12 +17,20 @@ from .chains import (
 )
 from .geometry import (
     characterize_chain_contacts,
+    characterize_intrachain_contacts,
+    DistanceMetric,
     get_interaction_residues,
     get_interaction_residues_full,
     get_min_dist,
     get_residue_coords,
     move_to_center,
     superimpose_PCA,
+)
+from .matrices import (
+    DistanceMatrix,
+    get_distance_matrix,
+    get_interchain_distance_matrix,
+    MatrixDistanceMetric,
 )
 from .io import (
     convert_cif_to_pdb,
@@ -34,7 +42,14 @@ from .io import (
     map_three_to_one,
     save_structure_to_file,
 )
-from .visualization import plot_structure
+from .visualization import (
+    InteractionMeasure,
+    plot_distance_matrix,
+    plot_interaction_matrix,
+    plot_interchain_distance_matrix,
+    plot_interchain_interaction_matrix,
+    plot_structure,
+)
 from .metadata import PDBMetadata, RCSBMetadataError, get_pdb_metadata
 from .secondary_structure import (
     AccessibilityScale,
@@ -61,14 +76,19 @@ __all__ = [
     "apply_transformation",
     "assign_secondary_structure",
     "calculate_sasa",
+    "characterize_chain_contacts",
+    "characterize_intrachain_contacts",
     "clip_chain",
     "convert_cif_to_pdb",
     "DSSPResidue",
     "DSSPResult",
+    "DistanceMetric",
+    "DistanceMatrix",
     "extract_chain",
     "get_aa_sequence",
     "get_alignment",
-    "characterize_chain_contacts",
+    "get_distance_matrix",
+    "get_interchain_distance_matrix",
     "get_interaction_residues",
     "get_interaction_residues_full",
     "get_min_dist",
@@ -81,9 +101,15 @@ __all__ = [
     "load_pdb_from_file",
     "InteractionSurfaceResult",
     "InteractionSurfaceScore",
+    "InteractionMeasure",
     "map_three_to_one",
+    "MatrixDistanceMetric",
     "move_to_center",
     "PDBMetadata",
+    "plot_distance_matrix",
+    "plot_interaction_matrix",
+    "plot_interchain_distance_matrix",
+    "plot_interchain_interaction_matrix",
     "plot_structure",
     "remove_wather_molecules",
     "rename_chain",
