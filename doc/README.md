@@ -4,6 +4,7 @@
 
 ## Inhaltsverzeichnis
 
+- [Changes since the latest release](changes.md)
 - [Structure](structure/README.md)
   - Structure I/O and metadata
   - Chain manipulation and alignment
