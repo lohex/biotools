@@ -90,10 +90,32 @@ def _parse_freesasa_output(
 ) -> SASAResult:
     try:
         document = json.loads(output)
-        result_document = document["results"][0]
-        structure_document = result_document["structures"][0]
+        if not isinstance(document, dict):
+            raise TypeError("FreeSASA output must be a JSON object")
+        result_documents = document["results"]
+        if not isinstance(result_documents, list) or not result_documents:
+            raise TypeError("FreeSASA results must be a non-empty list")
+        result_document = result_documents[0]
+        if not isinstance(result_document, dict):
+            raise TypeError("FreeSASA result must be a JSON object")
+
+        structure_keys = {
+            key for key in ("structure", "structures") if key in result_document
+        }
+        if len(structure_keys) != 1:
+            raise ValueError(
+                "FreeSASA result must contain exactly one structure key"
+            )
+        structure_documents = result_document[structure_keys.pop()]
+        if not isinstance(structure_documents, list) or not structure_documents:
+            raise TypeError("FreeSASA structures must be a non-empty list")
+        structure_document = structure_documents[0]
+        if not isinstance(structure_document, dict):
+            raise TypeError("FreeSASA structure must be a JSON object")
         total_absolute_sasa = float(structure_document["area"]["total"])
         chain_documents = structure_document["chains"]
+        if not isinstance(chain_documents, list):
+            raise TypeError("FreeSASA chains must be a list")
     except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("Could not parse FreeSASA JSON output") from exc
 
@@ -101,13 +123,26 @@ def _parse_freesasa_output(
     residues = []
     try:
         for chain_document in chain_documents:
+            if not isinstance(chain_document, dict):
+                raise TypeError("FreeSASA chain must be a JSON object")
             pdb_chain_id = str(chain_document["label"])
             chain_id = reverse_chain_map.get(pdb_chain_id, pdb_chain_id)
             chain_absolute_sasa[chain_id] = float(
                 chain_document["area"]["total"]
             )
-            for residue_document in chain_document.get("residues", []):
+            residue_documents = chain_document.get("residues", [])
+            if not isinstance(residue_documents, list):
+                raise TypeError("FreeSASA residues must be a list")
+            for residue_document in residue_documents:
+                if not isinstance(residue_document, dict):
+                    raise TypeError("FreeSASA residue must be a JSON object")
                 relative_document = residue_document.get("relative-area")
+                if relative_document is not None and not isinstance(
+                    relative_document, dict
+                ):
+                    raise TypeError(
+                        "FreeSASA relative residue area must be a JSON object"
+                    )
                 relative_sasa = (
                     None
                     if relative_document is None
@@ -137,15 +172,20 @@ def _parse_freesasa_output(
     )
 
 
-def _run_freesasa(input_path: Path, executable: str) -> str:
+def _execute_freesasa(
+        executable: str,
+        depth_option: str,
+        input_path: Path,
+    ) -> subprocess.CompletedProcess[str]:
+    """Asembles and executes the FreeSASA command line, returning the completed process."""
     command = [
         executable,
         "--format=json",
-        "--output-depth=residue",
+        depth_option,
         str(input_path),
     ]
     try:
-        completed = subprocess.run(
+        return subprocess.run(
             command,
             capture_output=True,
             text=True,
@@ -156,6 +196,32 @@ def _run_freesasa(input_path: Path, executable: str) -> str:
             "FreeSASA is not installed or its 'freesasa' executable is not "
             "available on PATH"
         ) from exc
+
+
+def _reports_unknown_option(
+    completed: subprocess.CompletedProcess[str],
+    option: str,
+) -> bool:
+    detail = "\n".join((completed.stderr or "", completed.stdout or ""))
+    return bool(
+        re.search(
+            rf"\bunknown\s+option\b\s*(?::\s*)?['\"]?"
+            rf"{re.escape(option)}(?:['\"]|\s|$)",
+            detail,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _run_freesasa(executable: str, input_path: Path) -> str:
+    depth_option = "--output-depth=residue"
+    completed = _execute_freesasa(executable, depth_option, input_path)
+    if completed.returncode != 0 and _reports_unknown_option(
+        completed, depth_option
+    ):
+        depth_option = "--depth=residue"
+        completed = _execute_freesasa(executable, depth_option, input_path)
+
     if completed.returncode != 0 or not completed.stdout.strip():
         detail = (completed.stderr or completed.stdout).strip()
         raise OSError(
@@ -211,7 +277,7 @@ def calculate_sasa(
             str(input_path),
             verbose=False,
         )
-        output = _run_freesasa(input_path, executable)
+        output = _run_freesasa(executable, input_path)
     return _parse_freesasa_output(output, reverse_chain_map)
 
 

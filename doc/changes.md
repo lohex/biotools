@@ -6,7 +6,10 @@ release is published.
 
 ## Unreleased
 
-No changes yet.
+### Fixed
+
+- Added compatibility with both upstream and Ubuntu/Debian FreeSASA CLI depth
+  options and JSON structure keys without masking unrelated FreeSASA errors.
 
 ## 0.1.1 - 2026-08-10
 

@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 import json
 from pathlib import Path
+import shutil
 import subprocess
 from unittest.mock import patch
 
@@ -64,12 +65,12 @@ def _structure() -> Structure.Structure:
     return structure
 
 
-def _freesasa_json() -> str:
+def _freesasa_json(*, structure_key: str = "structures") -> str:
     return json.dumps(
         {
             "results": [
                 {
-                    "structures": [
+                    structure_key: [
                         {
                             "area": {"total": 150.0},
                             "chains": [
@@ -158,12 +159,121 @@ def test_calculate_sasa_calls_freesasa_and_parses_residue_areas() -> None:
     assert result.residues[1].relative_sasa is None
 
 
+def test_calculate_sasa_retries_debian_depth_option_and_parses_structure() -> None:
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if "--output-depth=residue" in command:
+            return _completed(
+                command,
+                stderr=(
+                    "freesasa: error: unknown option "
+                    "'--output-depth=residue'"
+                ),
+                returncode=1,
+            )
+        return _completed(
+            command,
+            stdout=_freesasa_json(structure_key="structure"),
+        )
+
+    with patch(
+        "biotools.structure.surface.subprocess.run",
+        side_effect=run,
+    ):
+        result = calculate_sasa(_structure())
+
+    assert [command[2] for command in commands] == [
+        "--output-depth=residue",
+        "--depth=residue",
+    ]
+    assert result.total_absolute_sasa == 150.0
+    assert result.chain_absolute_sasa == {"A": 150.0}
+    assert len(result.residues) == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "freesasa: error: invalid input",
+        (
+            "freesasa: error: unknown option '--other-option'\n"
+            "arguments included --output-depth=residue"
+        ),
+    ],
+)
+def test_calculate_sasa_does_not_retry_unrelated_freesasa_error(
+    error,
+) -> None:
+    completed = _completed([], stderr=error, returncode=1)
+    with patch(
+        "biotools.structure.surface.subprocess.run",
+        return_value=completed,
+    ) as run, pytest.raises(OSError, match="FreeSASA failed"):
+        calculate_sasa(_structure())
+
+    run.assert_called_once()
+
+
+def test_calculate_sasa_reports_error_from_debian_depth_retry() -> None:
+    attempts = [
+        _completed(
+            [],
+            stderr=(
+                "freesasa: error: unknown option "
+                "'--output-depth=residue'"
+            ),
+            returncode=1,
+        ),
+        _completed([], stderr="freesasa: error: invalid input", returncode=1),
+    ]
+    with patch(
+        "biotools.structure.surface.subprocess.run",
+        side_effect=attempts,
+    ) as run, pytest.raises(OSError, match="invalid input"):
+        calculate_sasa(_structure())
+
+    assert run.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "result_document",
+    [
+        {"structure": [], "structures": []},
+        {"structure": {}},
+        {"structures": "not-a-list"},
+    ],
+)
+def test_calculate_sasa_strictly_validates_structure_keys(
+    result_document,
+) -> None:
+    output = json.dumps({"results": [result_document]})
+    with patch(
+        "biotools.structure.surface.subprocess.run",
+        return_value=_completed([], stdout=output),
+    ), pytest.raises(ValueError, match="Could not parse FreeSASA JSON"):
+        calculate_sasa(_structure())
+
+
 def test_calculate_sasa_reports_missing_executable() -> None:
     with patch(
         "biotools.structure.surface.subprocess.run",
         side_effect=FileNotFoundError("freesasa"),
     ), pytest.raises(FileNotFoundError, match="FreeSASA is not installed"):
         calculate_sasa(_structure())
+
+
+@pytest.mark.skipif(
+    shutil.which("freesasa") is None,
+    reason="FreeSASA executable is not available",
+)
+def test_calculate_sasa_with_installed_freesasa() -> None:
+    result = calculate_sasa(_structure())
+
+    assert result.total_absolute_sasa > 0.0
+    assert set(result.chain_absolute_sasa) == {"A", "B", "C"}
+    assert {residue.chain_id for residue in result.residues} == {"A", "B", "C"}
 
 
 def _sasa_result(
