@@ -18,6 +18,7 @@
 - [Distances and contacts](#distances-and-contacts)
   - [Residue contacts by distance](#residue-contacts-by-distance)
   - [Geometric contact characterization](#geometric-contact-characterization)
+  - [Interaction definitions and calculations](interactions.md)
   - [Distance matrices](#distance-matrices)
   - [Interaction matrices](#interaction-matrices)
 - [Visualization and orientation](#visualization-and-orientation)
@@ -41,13 +42,26 @@ analyses and must be available on `PATH`:
 - `freesasa` for SASA and interaction-surface calculations.
 
 Contact characterization uses built-in protein bond templates without an
-optional dependency. A CPU-only OpenMM topology backend can be installed with:
+optional dependency. In Python packaging, an *extra* is a named group of
+optional dependencies. The `contacts` extra is declared in `pyproject.toml`
+and currently adds OpenMM; it is not a separate biotools module. Install a
+released package together with that group using:
+
+```bash
+python -m pip install "biotools[contacts]"
+```
+
+From an editable source checkout, use:
 
 ```bash
 python -m pip install -e ".[contacts]"
 ```
 
-This extra does not install the CUDA packages from `biotools[md]`.
+An ordinary `pip install biotools` omits this optional group. The `contacts`
+extra does not install the CUDA packages or PDBFixer from `biotools[md]`. It
+enables the OpenMM topology backend and the optional nonperiodic
+`openmm_rigid_water` local-refinement backend. The default template topology
+and `geometric` water backend do not require OpenMM.
 
 ## Structure I/O and metadata
 
@@ -282,6 +296,7 @@ contacts = characterize_chain_contacts(
     "B",
     atomic=False,
     topology_backend="templates",
+    profile="refined",
 )
 ```
 
@@ -291,6 +306,10 @@ cation–π candidates, and single-water bridges. Every category has a Boolean
 argument and is enabled by default. With `atomic=False`, one representative
 observation is returned per residue pair and category; `atomic=True` retains
 individual atom or group observations.
+
+The complete per-type chemical rules, formulas, thresholds, refinements,
+output fields, and single-water workflow are documented in
+[Interaction types and calculations](interactions.md).
 
 The default `"templates"` topology backend has no optional dependency. After
 installing `biotools[contacts]`, the CPU-only OpenMM backend can provide

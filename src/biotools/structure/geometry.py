@@ -14,6 +14,7 @@ from Bio.PDB.vectors import Vector
 if TYPE_CHECKING:
     from Bio.PDB.Residue import Residue
     from Bio.PDB.Structure import Structure
+    from .contacts import ContactConfig
 
 ResidueCoordinates: TypeAlias = tuple[int, str, list[Vector]]
 InteractionRecord: TypeAlias = list[int | str | float]
@@ -355,6 +356,7 @@ def characterize_chain_contacts(
     water_bridge: bool = True,
     pi_stacking_t_shaped: bool = True,
     topology_backend: str = "templates",
+    profile: str | ContactConfig = "refined",
 ) -> list[dict[str, Any]]:
     """Characterize noncovalent interactions between two protein chains.
 
@@ -381,6 +383,8 @@ def characterize_chain_contacts(
         topology_backend: Bond-topology provider. Use ``"templates"`` for the
             built-in protein templates or ``"openmm"`` with the optional
             ``contacts`` dependencies.
+        profile: Criteria profile (``"refined"`` or ``"legacy"``), or a
+            custom ``ContactConfig``.
 
     Returns:
         Normalized interaction dictionaries whose A/B orientation always
@@ -406,6 +410,7 @@ def characterize_chain_contacts(
         water_bridge=water_bridge,
         pi_stacking_t_shaped=pi_stacking_t_shaped,
         topology_backend=topology_backend,
+        profile=profile,
     )
 
 
@@ -423,6 +428,7 @@ def characterize_intrachain_contacts(
     water_bridge: bool = True,
     pi_stacking_t_shaped: bool = True,
     topology_backend: str = "templates",
+    profile: str | ContactConfig = "refined",
 ) -> list[dict[str, Any]]:
     """Characterize noncovalent interactions within one protein chain.
 
@@ -443,6 +449,7 @@ def characterize_intrachain_contacts(
         water_bridge: Include bridges mediated by the same explicit water.
         pi_stacking_t_shaped: Include T-shaped pi-stacking candidates.
         topology_backend: Built-in ``"templates"`` or optional ``"openmm"``.
+        profile: Versioned criteria profile or a custom ``ContactConfig``.
 
     Returns:
         One representative record per residue pair and interaction type.
@@ -465,4 +472,5 @@ def characterize_intrachain_contacts(
         water_bridge=water_bridge,
         pi_stacking_t_shaped=pi_stacking_t_shaped,
         topology_backend=topology_backend,
+        profile=profile,
     )

@@ -8,12 +8,14 @@ contact detectors can be tested and maintained independently.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
 from Bio.PDB import NeighborSearch
 from Bio.PDB.Polypeptide import is_aa
+
+from .contacts.config import ContactConfig, get_contact_config
 
 if TYPE_CHECKING:
     from Bio.PDB.Atom import Atom
@@ -48,14 +50,33 @@ ACCEPTOR_ATOMS = {
     "MET": {"SD"},
 }
 
+AROMATIC_RINGS = {
+    "PHE": (("phenyl", ("CG", "CD1", "CE1", "CZ", "CE2", "CD2")),),
+    "TYR": (("phenyl", ("CG", "CD1", "CE1", "CZ", "CE2", "CD2")),),
+    "HIS": (("imidazole", ("CG", "ND1", "CE1", "NE2", "CD2")),),
+    "HID": (("imidazole", ("CG", "ND1", "CE1", "NE2", "CD2")),),
+    "HIE": (("imidazole", ("CG", "ND1", "CE1", "NE2", "CD2")),),
+    "HIP": (("imidazolium", ("CG", "ND1", "CE1", "NE2", "CD2")),),
+    "TRP": (
+        ("pyrrole", ("CG", "CD1", "NE1", "CE2", "CD2")),
+        ("benzene", ("CD2", "CE2", "CZ2", "CH2", "CZ3", "CE3")),
+    ),
+}
+LEGACY_AROMATIC_RINGS = {
+    name: (("aromatic ring", atoms),)
+    for name, atoms in {
+        "PHE": ("CG", "CD1", "CD2", "CE1", "CE2", "CZ"),
+        "TYR": ("CG", "CD1", "CD2", "CE1", "CE2", "CZ"),
+        "HIS": ("CG", "ND1", "CD2", "CE1", "NE2"),
+        "HID": ("CG", "ND1", "CD2", "CE1", "NE2"),
+        "HIE": ("CG", "ND1", "CD2", "CE1", "NE2"),
+        "HIP": ("CG", "ND1", "CD2", "CE1", "NE2"),
+        "TRP": ("CG", "CD1", "CD2", "NE1", "CE2", "CE3", "CZ2", "CZ3", "CH2"),
+    }.items()
+}
+# Backwards-compatible internal alias used for the complete imidazole group.
 AROMATIC_ATOMS = {
-    "PHE": ("CG", "CD1", "CD2", "CE1", "CE2", "CZ"),
-    "TYR": ("CG", "CD1", "CD2", "CE1", "CE2", "CZ"),
-    "HIS": ("CG", "ND1", "CD2", "CE1", "NE2"),
-    "HID": ("CG", "ND1", "CD2", "CE1", "NE2"),
-    "HIE": ("CG", "ND1", "CD2", "CE1", "NE2"),
-    "HIP": ("CG", "ND1", "CD2", "CE1", "NE2"),
-    "TRP": ("CG", "CD1", "CD2", "NE1", "CE2", "CE3", "CZ2", "CZ3", "CH2"),
+    name: rings[0][1] for name, rings in AROMATIC_RINGS.items()
 }
 
 BACKBONE_BONDS = (("N", "CA"), ("CA", "C"), ("C", "O"), ("C", "OXT"))
@@ -109,6 +130,18 @@ class _Observation:
     angle: float | None = None
     geometry: str | None = None
     mediator: str | None = None
+    measurements: tuple[tuple[str, float, str], ...] = ()
+    criteria: tuple[tuple[str, bool, str], ...] = ()
+    role_a: str = "participant"
+    role_b: str = "participant"
+    evidence_level: str = "explicit_geometry"
+    quality_flags: tuple[str, ...] = ()
+    water: Any | None = None
+    member_count: int = 1
+    independent_group_count: int = 1
+    distance_min: float | None = None
+    distance_median: float | None = None
+    distance_max: float | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +160,9 @@ class _AromaticRing:
     atoms: tuple[Any, ...]
     center: np.ndarray
     normal: np.ndarray
+    ring_id: str
+    planarity_error: float
+    radius: float
 
 
 @dataclass(frozen=True)
@@ -136,6 +172,7 @@ class _WaterLeg:
     distance: float
     angle: float
     direction: str
+    evidence_level: str = "explicit_geometry"
 
 
 def _element(atom: Atom) -> str:
@@ -223,6 +260,35 @@ def _build_template_bond_adjacency(
             bond_distance, heavy = min(candidates, key=lambda item: item[0])
             if bond_distance <= 1.40:
                 _add_bond(adjacency, heavy, hydrogen)
+
+    # Add peptide bonds only for consecutive residues in the same chain whose
+    # C--N geometry is covalent.  A selection boundary therefore does not turn
+    # an internal residue into an artificial terminus, while real chain breaks
+    # remain breaks.
+    residues_by_chain: dict[Any, list[Any]] = defaultdict(list)
+    for residue in residues:
+        residues_by_chain[residue.get_parent()].append(residue)
+    for chain_residues in residues_by_chain.values():
+        for previous, following in zip(chain_residues, chain_residues[1:]):
+            previous_atoms = _atoms_by_name(previous)
+            following_atoms = _atoms_by_name(following)
+            carbon = previous_atoms.get("C")
+            nitrogen = following_atoms.get("N")
+            if carbon is not None and nitrogen is not None and _distance(carbon, nitrogen) <= 1.8:
+                _add_bond(adjacency, carbon, nitrogen)
+
+    # A conservative geometry fallback supplies disulfide exclusions to the
+    # dependency-free backend, including links between different chains.
+    sulfurs = [
+        _atoms_by_name(residue).get("SG")
+        for residue in residues
+        if _residue_name(residue) in {"CYS", "CYX"}
+    ]
+    sulfurs = [atom for atom in sulfurs if atom is not None]
+    for index, sulfur_a in enumerate(sulfurs):
+        for sulfur_b in sulfurs[index + 1 :]:
+            if 1.8 <= _distance(sulfur_a, sulfur_b) <= 2.3:
+                _add_bond(adjacency, sulfur_a, sulfur_b)
     return adjacency
 
 
@@ -348,6 +414,8 @@ def _is_acceptor(atom: Atom, adjacency: dict[Any, list[Any]]) -> bool:
     if atom_name in {"O", "OXT"}:
         return True
     if atom_name in ACCEPTOR_ATOMS.get(residue_name, set()):
+        if residue_name in {"ASP", "GLU"} and _bonded_hydrogens(atom, adjacency):
+            return False
         return True
     if residue_name == "ASH" and atom_name in {"OD1", "OD2"}:
         return not _bonded_hydrogens(atom, adjacency)
@@ -358,7 +426,11 @@ def _is_acceptor(atom: Atom, adjacency: dict[Any, list[Any]]) -> bool:
     return False
 
 
-def _hydrophobic_atoms(atoms: list[Atom], adjacency: dict[Any, list[Any]]) -> list[Atom]:
+def _hydrophobic_atoms(
+    atoms: list[Atom],
+    adjacency: dict[Any, list[Any]],
+    config: ContactConfig,
+) -> list[Atom]:
     selected = []
     for atom in atoms:
         symbol = _element(atom)
@@ -367,9 +439,47 @@ def _hydrophobic_atoms(atoms: list[Atom], adjacency: dict[Any, list[Any]]) -> li
             neighbors = adjacency.get(atom, [])
             if neighbors and {_element(neighbor) for neighbor in neighbors} <= {"C", "H"}:
                 selected.append(atom)
-        elif symbol == "S" and _residue_name(atom.get_parent()) in {"CYS", "CYM", "CYX", "MET"}:
+        elif (
+            symbol == "S"
+            and not config.refined_geometry
+            and _residue_name(atom.get_parent()) in {"CYS", "CYM", "CYX", "MET"}
+        ):
             selected.append(atom)
+        elif symbol == "S" and _residue_name(atom.get_parent()) in {"CYS", "MET"}:
+            # Charged thiolate (CYM) and disulfide sulfur (CYX or an explicit
+            # interresidue S--S bond) are not ordinary nonpolar sulfur sites.
+            if not any(
+                _element(neighbor) == "S" and neighbor.get_parent() is not atom.get_parent()
+                for neighbor in adjacency.get(atom, [])
+            ):
+                selected.append(atom)
     return selected
+
+
+def _bond_separation(
+    atom_a: Atom,
+    atom_b: Atom,
+    adjacency: dict[Any, list[Any]] | Any,
+    maximum: int,
+) -> int | None:
+    """Return a shortest bond separation up to ``maximum``."""
+    if atom_a is atom_b:
+        return 0
+    frontier = {atom_a}
+    visited = {atom_a}
+    for separation in range(1, maximum + 1):
+        frontier = {
+            neighbor
+            for atom in frontier
+            for neighbor in adjacency.get(atom, ())
+            if neighbor not in visited
+        }
+        if atom_b in frontier:
+            return separation
+        visited.update(frontier)
+        if not frontier:
+            break
+    return None
 
 
 def _pair_hits(
@@ -389,7 +499,9 @@ def _pair_hits(
 
 
 def _charged_groups(
-    residues: list[Residue], adjacency: dict[Any, list[Any]]
+    residues: list[Residue],
+    adjacency: dict[Any, list[Any]],
+    config: ContactConfig,
 ) -> list[_ChargedGroup]:
     groups: list[_ChargedGroup] = []
 
@@ -422,46 +534,78 @@ def _charged_groups(
         elif name in {"HIS", "HIP"}:
             named = _atoms_by_name(residue)
             ring_nitrogens = (named.get("ND1"), named.get("NE2"))
-            if all(
+            if (name == "HIP" and config.refined_geometry) or all(
                 atom is not None and _bonded_hydrogens(atom, adjacency)
                 for atom in ring_nitrogens
             ):
                 add_group(residue, 1, AROMATIC_ATOMS["HIS"], "protonated imidazolium")
 
-    if residues:
-        first_named = _atoms_by_name(residues[0])
-        terminal_n = first_named.get("N")
-        if terminal_n is not None and len(_bonded_hydrogens(terminal_n, adjacency)) >= 2:
-            add_group(residues[0], 1, ("N",), "N-terminus")
-        last_named = _atoms_by_name(residues[-1])
-        if "O" in last_named and "OXT" in last_named:
-            add_group(residues[-1], -1, ("O", "OXT"), "C-terminus")
+    terminal_residues = (
+        residues
+        if config.refined_geometry
+        else list(dict.fromkeys(residues[:1] + residues[-1:]))
+    )
+    for residue in terminal_residues:
+        named = _atoms_by_name(residue)
+        terminal_n = named.get("N")
+        has_previous_peptide_bond = terminal_n is not None and any(
+            neighbor.get_parent() is not residue
+            and str(neighbor.get_name()).strip() == "C"
+            for neighbor in adjacency.get(terminal_n, ())
+        )
+        if (
+            terminal_n is not None
+            and (not has_previous_peptide_bond or not config.refined_geometry)
+            and len(_bonded_hydrogens(terminal_n, adjacency)) >= 2
+        ):
+            add_group(residue, 1, ("N",), "N-terminus")
+        if "O" in named and "OXT" in named:
+            add_group(residue, -1, ("O", "OXT"), "C-terminus")
     return groups
 
 
-def _aromatic_rings(residues: list[Residue]) -> list[_AromaticRing]:
+def _aromatic_rings(
+    residues: list[Residue], config: ContactConfig
+) -> list[_AromaticRing]:
     rings = []
     for residue in residues:
-        expected_names = AROMATIC_ATOMS.get(_residue_name(residue))
-        if expected_names is None:
+        ring_table = AROMATIC_RINGS if config.refined_geometry else LEGACY_AROMATIC_RINGS
+        definitions = ring_table.get(_residue_name(residue))
+        if definitions is None:
             continue
         named = _atoms_by_name(residue)
-        if not all(name in named for name in expected_names):
-            continue
-        atoms = tuple(named[name] for name in expected_names)
-        coordinates = np.asarray([_coord(atom) for atom in atoms])
-        center = coordinates.mean(axis=0)
-        _, _, right_singular_vectors = np.linalg.svd(coordinates - center)
-        normal = right_singular_vectors[-1]
-        normal_norm = np.linalg.norm(normal)
-        if normal_norm == 0.0:
-            continue
-        rings.append(_AromaticRing(residue, atoms, center, normal / normal_norm))
+        for ring_id, expected_names in definitions:
+            if not all(name in named for name in expected_names):
+                continue
+            atoms = tuple(named[name] for name in expected_names)
+            coordinates = np.asarray([_coord(atom) for atom in atoms])
+            center = coordinates.mean(axis=0)
+            centered = coordinates - center
+            if np.linalg.matrix_rank(centered) < 2:
+                continue
+            _, _, right_singular_vectors = np.linalg.svd(centered)
+            normal = right_singular_vectors[-1]
+            normal_norm = np.linalg.norm(normal)
+            if normal_norm == 0.0:
+                continue
+            normal = normal / normal_norm
+            planarity = float(np.max(np.abs(centered @ normal)))
+            if planarity > config.ring_planarity_tolerance:
+                continue
+            radius = float(np.max(np.linalg.norm(centered, axis=1)))
+            rings.append(
+                _AromaticRing(
+                    residue, atoms, center, normal, ring_id, planarity, radius
+                )
+            )
     return rings
 
 
 def _hydrogen_bonds(
-    atoms_a: list[Atom], atoms_b: list[Atom], adjacency: dict[Any, list[Any]]
+    atoms_a: list[Atom],
+    atoms_b: list[Atom],
+    adjacency: dict[Any, list[Any]],
+    config: ContactConfig,
 ) -> list[_Observation]:
     records = []
     directions = ((atoms_a, atoms_b, True), (atoms_b, atoms_a, False))
@@ -471,30 +615,57 @@ def _hydrogen_bonds(
             continue
         search = NeighborSearch(acceptors)
         for donor, hydrogen in _donor_pairs(donor_atoms, adjacency):
-            for acceptor in search.search(_coord(donor), HBOND_DISTANCE_A, level="A"):
+            for acceptor in search.search(
+                _coord(donor), config.hydrogen_bond_distance, level="A"
+            ):
                 angle = _angle_degrees(_coord(donor), _coord(hydrogen), _coord(acceptor))
-                if not np.isfinite(angle) or angle < HBOND_ANGLE_DEG:
+                if not np.isfinite(angle) or angle < config.hydrogen_bond_angle:
                     continue
+                donor_acceptor = _distance(donor, acceptor)
+                hydrogen_acceptor = _distance(hydrogen, acceptor)
                 if a_is_donor:
                     residue_a, residue_b = donor.get_parent(), acceptor.get_parent()
                     atom_a, atom_b = donor.get_name(), acceptor.get_name()
                     direction = "chain A donor"
+                    roles = ("donor", "acceptor")
                 else:
                     residue_a, residue_b = acceptor.get_parent(), donor.get_parent()
                     atom_a, atom_b = acceptor.get_name(), donor.get_name()
                     direction = "chain B donor"
+                    roles = ("acceptor", "donor")
                 records.append(
                     _Observation(
                         "hydrogen_bond", residue_a, residue_b, atom_a, atom_b,
-                        _distance(donor, acceptor), angle,
+                        donor_acceptor, angle,
                         f"{direction}; H={hydrogen.get_name()}",
+                        measurements=(
+                            ("donor_acceptor_distance", donor_acceptor, "angstrom"),
+                            ("hydrogen_acceptor_distance", hydrogen_acceptor, "angstrom"),
+                            ("donor_hydrogen_acceptor_angle", angle, "degree"),
+                        ),
+                        criteria=(
+                            (
+                                "donor_acceptor_distance",
+                                donor_acceptor <= config.hydrogen_bond_distance,
+                                f"<= {config.hydrogen_bond_distance} angstrom",
+                            ),
+                            (
+                                "donor_hydrogen_acceptor_angle",
+                                angle >= config.hydrogen_bond_angle,
+                                f">= {config.hydrogen_bond_angle} degree",
+                            ),
+                        ),
+                        role_a=roles[0],
+                        role_b=roles[1],
                     )
                 )
     return records
 
 
 def _salt_bridges(
-    groups_a: list[_ChargedGroup], groups_b: list[_ChargedGroup]
+    groups_a: list[_ChargedGroup],
+    groups_b: list[_ChargedGroup],
+    config: ContactConfig,
 ) -> list[_Observation]:
     records = []
     for group_a in groups_a:
@@ -502,45 +673,107 @@ def _salt_bridges(
             if group_a.sign * group_b.sign != -1:
                 continue
             distance = float(np.linalg.norm(group_a.center - group_b.center))
-            if distance <= SALT_BRIDGE_DISTANCE_A:
+            if distance <= config.salt_bridge_distance:
+                nearest = min(
+                    _distance(atom_a, atom_b)
+                    for atom_a in group_a.atoms
+                    for atom_b in group_b.atoms
+                )
+                roles = ("cation", "anion") if group_a.sign > 0 else ("anion", "cation")
                 records.append(
                     _Observation(
                         "salt_bridge", group_a.residue, group_b.residue,
                         group_a.atom_label, group_b.atom_label, distance,
                         geometry=f"{group_a.group_label}/{group_b.group_label}",
+                        measurements=(
+                            ("charge_center_distance", distance, "angstrom"),
+                            ("nearest_group_atom_distance", nearest, "angstrom"),
+                        ),
+                        criteria=((
+                            "charge_center_distance",
+                            distance <= config.salt_bridge_distance,
+                            f"<= {config.salt_bridge_distance} angstrom",
+                        ),),
+                        role_a=roles[0],
+                        role_b=roles[1],
                     )
                 )
     return records
 
 
 def _hydrophobic_contacts(
-    atoms_a: list[Atom], atoms_b: list[Atom], adjacency: dict[Any, list[Any]]
+    atoms_a: list[Atom],
+    atoms_b: list[Atom],
+    adjacency: dict[Any, list[Any]],
+    config: ContactConfig,
 ) -> list[_Observation]:
-    return [
-        _Observation(
-            "hydrophobic_contact", atom_a.get_parent(), atom_b.get_parent(),
-            atom_a.get_name(), atom_b.get_name(), distance,
+    records = []
+    for atom_a, atom_b, distance in _pair_hits(
+        _hydrophobic_atoms(atoms_a, adjacency, config),
+        _hydrophobic_atoms(atoms_b, adjacency, config),
+        config.hydrophobic_distance,
+    ):
+        radii = VDW_RADII_A.get(_element(atom_a), 0.0) + VDW_RADII_A.get(_element(atom_b), 0.0)
+        surface_gap = distance - radii
+        records.append(
+            _Observation(
+                "hydrophobic_contact", atom_a.get_parent(), atom_b.get_parent(),
+                atom_a.get_name(), atom_b.get_name(), distance,
+                measurements=(
+                    ("atom_distance", distance, "angstrom"),
+                    ("surface_gap", surface_gap, "angstrom"),
+                ),
+                criteria=((
+                    "atom_distance", distance <= config.hydrophobic_distance,
+                    f"<= {config.hydrophobic_distance} angstrom",
+                ),),
+                role_a="nonpolar_atom",
+                role_b="nonpolar_atom",
+            )
         )
-        for atom_a, atom_b, distance in _pair_hits(
-            _hydrophobic_atoms(atoms_a, adjacency),
-            _hydrophobic_atoms(atoms_b, adjacency),
-            HYDROPHOBIC_DISTANCE_A,
-        )
-    ]
+    return records
 
 
-def _vdw_contacts(atoms_a: list[Atom], atoms_b: list[Atom]) -> list[_Observation]:
+def _vdw_contacts(
+    atoms_a: list[Atom],
+    atoms_b: list[Atom],
+    adjacency: dict[Any, list[Any]],
+    config: ContactConfig,
+) -> list[_Observation]:
     heavy_a = [atom for atom in atoms_a if _element(atom) in VDW_RADII_A]
     heavy_b = [atom for atom in atoms_b if _element(atom) in VDW_RADII_A]
-    maximum_cutoff = 2 * max(VDW_RADII_A.values()) + VDW_TOLERANCE_A
+    maximum_cutoff = 2 * max(VDW_RADII_A.values()) + config.vdw_tolerance
     records = []
     for atom_a, atom_b, distance in _pair_hits(heavy_a, heavy_b, maximum_cutoff):
-        cutoff = VDW_RADII_A[_element(atom_a)] + VDW_RADII_A[_element(atom_b)] + VDW_TOLERANCE_A
+        maximum_separation = 3 if config.exclude_one_four else 2
+        if (
+            config.refined_geometry
+            and _bond_separation(atom_a, atom_b, adjacency, maximum_separation) is not None
+        ):
+            continue
+        radii_sum = VDW_RADII_A[_element(atom_a)] + VDW_RADII_A[_element(atom_b)]
+        cutoff = radii_sum + config.vdw_tolerance
         if distance <= cutoff:
+            surface_gap = distance - radii_sum
+            overlap_depth = max(0.0, -surface_gap)
+            steric_clash = overlap_depth > config.steric_clash_overlap
             records.append(
                 _Observation(
                     "van_der_waals_contact", atom_a.get_parent(), atom_b.get_parent(),
                     atom_a.get_name(), atom_b.get_name(), distance,
+                    geometry="steric clash" if steric_clash else "vdW proximity",
+                    measurements=(
+                        ("atom_distance", distance, "angstrom"),
+                        ("surface_gap", surface_gap, "angstrom"),
+                        ("overlap_depth", overlap_depth, "angstrom"),
+                    ),
+                    criteria=((
+                        "vdw_proximity", distance <= cutoff,
+                        f"<= radii_sum + {config.vdw_tolerance} angstrom",
+                    ),),
+                    role_a="atom",
+                    role_b="atom",
+                    quality_flags=("steric_clash",) if steric_clash else (),
                 )
             )
     return records
@@ -554,6 +787,7 @@ def _aromatic_interactions(
     include_parallel: bool,
     include_t_shaped: bool,
     include_cation_pi: bool,
+    config: ContactConfig,
 ) -> list[_Observation]:
     records = []
     if include_parallel or include_t_shaped:
@@ -561,7 +795,7 @@ def _aromatic_interactions(
             for ring_b in rings_b:
                 displacement = ring_b.center - ring_a.center
                 distance = float(np.linalg.norm(displacement))
-                if distance > PI_STACKING_DISTANCE_A:
+                if distance > config.pi_distance:
                     continue
                 normal_cosine = np.clip(abs(np.dot(ring_a.normal, ring_b.normal)), 0.0, 1.0)
                 plane_angle = float(np.degrees(np.arccos(normal_cosine)))
@@ -578,48 +812,230 @@ def _aromatic_interactions(
                     )
                 )
                 lateral_offset = max(offset_a, offset_b)
+                height_a = abs(float(np.dot(displacement, ring_a.normal)))
+                height_b = abs(float(np.dot(displacement, ring_b.normal)))
+                nearest_atom = min(
+                    _distance(atom_a, atom_b)
+                    for atom_a in ring_a.atoms
+                    for atom_b in ring_b.atoms
+                )
+                common_measurements = (
+                    ("centroid_distance", distance, "angstrom"),
+                    ("interplane_angle", plane_angle, "degree"),
+                    ("height_from_ring_a", height_a, "angstrom"),
+                    ("height_from_ring_b", height_b, "angstrom"),
+                    ("lateral_offset_a", offset_a, "angstrom"),
+                    ("lateral_offset_b", offset_b, "angstrom"),
+                    ("nearest_ring_atom_distance", nearest_atom, "angstrom"),
+                    ("planarity_error_a", ring_a.planarity_error, "angstrom"),
+                    ("planarity_error_b", ring_b.planarity_error, "angstrom"),
+                )
                 if (
                     include_parallel
-                    and plane_angle <= PI_PARALLEL_ANGLE_DEG
-                    and lateral_offset <= PI_PARALLEL_OFFSET_A
+                    and plane_angle <= config.pi_parallel_angle
+                    and lateral_offset <= config.pi_parallel_offset
+                    and nearest_atom >= config.pi_min_nearest_atom_distance
                 ):
                     records.append(
                         _Observation(
                             "pi_stacking_parallel", ring_a.residue, ring_b.residue,
-                            "aromatic ring", "aromatic ring", distance, plane_angle,
+                            ring_a.ring_id, ring_b.ring_id, distance, plane_angle,
                             f"parallel; offset={lateral_offset:.2f} A",
+                            measurements=common_measurements,
+                            criteria=(
+                                (
+                                    "centroid_distance",
+                                    distance <= config.pi_distance,
+                                    f"<= {config.pi_distance} angstrom",
+                                ),
+                                (
+                                    "interplane_angle",
+                                    plane_angle <= config.pi_parallel_angle,
+                                    f"<= {config.pi_parallel_angle} degree",
+                                ),
+                                (
+                                    "lateral_offset",
+                                    lateral_offset <= config.pi_parallel_offset,
+                                    f"<= {config.pi_parallel_offset} angstrom",
+                                ),
+                                (
+                                    "nearest_atom_distance",
+                                    nearest_atom >= config.pi_min_nearest_atom_distance,
+                                    f">= {config.pi_min_nearest_atom_distance} angstrom",
+                                ),
+                            ),
+                            role_a="ring",
+                            role_b="ring",
                         )
                     )
-                if include_t_shaped and plane_angle >= PI_TSHAPED_ANGLE_DEG:
+                # For an edge-to-face contact the edge-ring centre must lie
+                # above the face polygon (plus tolerance), and the face centre
+                # must be near the edge-ring plane.  Evaluate both assignments.
+                assignments = (
+                    (ring_a, ring_b, offset_a, height_a, height_b),
+                    (ring_b, ring_a, offset_b, height_b, height_a),
+                )
+                valid_assignment = next(
+                    (
+                        (face, edge)
+                        for face, edge, face_offset, face_height, edge_plane_offset in assignments
+                        if face_offset <= face.radius + config.pi_projection_tolerance
+                        and face_height >= config.cation_pi_min_height
+                        and edge_plane_offset <= edge.radius + config.pi_projection_tolerance
+                    ),
+                    None,
+                )
+                if (
+                    include_t_shaped
+                    and plane_angle >= config.pi_t_shaped_angle
+                    and (valid_assignment is not None or not config.refined_geometry)
+                    and nearest_atom >= config.pi_min_nearest_atom_distance
+                ):
+                    face, edge = valid_assignment or (ring_a, ring_b)
+                    roles = (
+                        ("face_ring", "edge_ring")
+                        if face is ring_a
+                        else ("edge_ring", "face_ring")
+                    )
                     records.append(
                         _Observation(
                             "pi_stacking_t_shaped", ring_a.residue, ring_b.residue,
-                            "aromatic ring", "aromatic ring", distance, plane_angle,
-                            "t-shaped candidate",
+                            ring_a.ring_id, ring_b.ring_id, distance, plane_angle,
+                            f"edge-to-face candidate; face={face.ring_id}; edge={edge.ring_id}",
+                            measurements=common_measurements,
+                            criteria=(
+                                (
+                                    "centroid_distance",
+                                    distance <= config.pi_distance,
+                                    f"<= {config.pi_distance} angstrom",
+                                ),
+                                (
+                                    "interplane_angle",
+                                    plane_angle >= config.pi_t_shaped_angle,
+                                    f">= {config.pi_t_shaped_angle} degree",
+                                ),
+                                (
+                                    "edge_to_face_projection",
+                                    valid_assignment is not None,
+                                    "projection within ring radius plus tolerance",
+                                ),
+                                (
+                                    "nearest_atom_distance",
+                                    nearest_atom >= config.pi_min_nearest_atom_distance,
+                                    f">= {config.pi_min_nearest_atom_distance} angstrom",
+                                ),
+                            ),
+                            role_a=roles[0],
+                            role_b=roles[1],
+                            evidence_level=(
+                                "explicit_geometry"
+                                if valid_assignment is not None
+                                else "distance_candidate"
+                            ),
                         )
                     )
 
     if include_cation_pi:
         for group in (group for group in groups_a if group.sign == 1):
             for ring in rings_b:
-                distance = float(np.linalg.norm(group.center - ring.center))
-                if distance <= CATION_PI_DISTANCE_A:
+                displacement = group.center - ring.center
+                distance = float(np.linalg.norm(displacement))
+                height = abs(float(np.dot(displacement, ring.normal)))
+                lateral = float(
+                    np.linalg.norm(
+                        displacement
+                        - np.dot(displacement, ring.normal) * ring.normal
+                    )
+                )
+                projection_valid = lateral <= ring.radius + config.pi_projection_tolerance
+                if (
+                    distance <= config.cation_pi_distance
+                    and (
+                        not config.refined_geometry
+                        or (height >= config.cation_pi_min_height and projection_valid)
+                    )
+                ):
                     records.append(
                         _Observation(
                             "cation_pi_candidate", group.residue, ring.residue,
-                            group.atom_label, "aromatic ring", distance,
+                            group.atom_label, ring.ring_id, distance,
                             geometry="chain A cation",
+                            measurements=(
+                                ("cation_centroid_distance", distance, "angstrom"),
+                                ("ring_plane_height", height, "angstrom"),
+                                ("lateral_offset", lateral, "angstrom"),
+                                ("ring_planarity_error", ring.planarity_error, "angstrom"),
+                            ),
+                            criteria=(
+                                (
+                                    "cation_centroid_distance",
+                                    distance <= config.cation_pi_distance,
+                                    f"<= {config.cation_pi_distance} angstrom",
+                                ),
+                                (
+                                    "ring_plane_height",
+                                    height >= config.cation_pi_min_height,
+                                    f">= {config.cation_pi_min_height} angstrom",
+                                ),
+                                (
+                                    "projection",
+                                    projection_valid,
+                                    "within ring radius plus tolerance",
+                                ),
+                            ),
+                            role_a="cation",
+                            role_b="ring",
                         )
                     )
         for group in (group for group in groups_b if group.sign == 1):
             for ring in rings_a:
-                distance = float(np.linalg.norm(group.center - ring.center))
-                if distance <= CATION_PI_DISTANCE_A:
+                displacement = group.center - ring.center
+                distance = float(np.linalg.norm(displacement))
+                height = abs(float(np.dot(displacement, ring.normal)))
+                lateral = float(
+                    np.linalg.norm(
+                        displacement
+                        - np.dot(displacement, ring.normal) * ring.normal
+                    )
+                )
+                projection_valid = lateral <= ring.radius + config.pi_projection_tolerance
+                if (
+                    distance <= config.cation_pi_distance
+                    and (
+                        not config.refined_geometry
+                        or (height >= config.cation_pi_min_height and projection_valid)
+                    )
+                ):
                     records.append(
                         _Observation(
                             "cation_pi_candidate", ring.residue, group.residue,
-                            "aromatic ring", group.atom_label, distance,
+                            ring.ring_id, group.atom_label, distance,
                             geometry="chain B cation",
+                            measurements=(
+                                ("cation_centroid_distance", distance, "angstrom"),
+                                ("ring_plane_height", height, "angstrom"),
+                                ("lateral_offset", lateral, "angstrom"),
+                                ("ring_planarity_error", ring.planarity_error, "angstrom"),
+                            ),
+                            criteria=(
+                                (
+                                    "cation_centroid_distance",
+                                    distance <= config.cation_pi_distance,
+                                    f"<= {config.cation_pi_distance} angstrom",
+                                ),
+                                (
+                                    "ring_plane_height",
+                                    height >= config.cation_pi_min_height,
+                                    f">= {config.cation_pi_min_height} angstrom",
+                                ),
+                                (
+                                    "projection",
+                                    projection_valid,
+                                    "within ring radius plus tolerance",
+                                ),
+                            ),
+                            role_a="ring",
+                            role_b="cation",
                         )
                     )
     return records
@@ -629,6 +1045,7 @@ def _protein_water_legs(
     protein_atoms: list[Atom],
     water_residues: list[Residue],
     adjacency: dict[Any, list[Any]],
+    config: ContactConfig,
 ) -> dict[Residue, list[_WaterLeg]]:
     water_sites = []
     for water in water_residues:
@@ -637,7 +1054,7 @@ def _protein_water_legs(
         if oxygen is None:
             continue
         hydrogens = _bonded_hydrogens(oxygen, adjacency)
-        if hydrogens:
+        if hydrogens or config.refined_geometry:
             water_sites.append((water, oxygen, hydrogens))
     if not water_sites:
         return {}
@@ -647,27 +1064,43 @@ def _protein_water_legs(
     legs: dict[Any, list[_WaterLeg]] = defaultdict(list)
 
     for donor, hydrogen in _donor_pairs(protein_atoms, adjacency):
-        for oxygen in water_search.search(_coord(donor), HBOND_DISTANCE_A, level="A"):
+        for oxygen in water_search.search(
+            _coord(donor), config.hydrogen_bond_distance, level="A"
+        ):
             water, _ = site_by_oxygen[oxygen]
             angle = _angle_degrees(_coord(donor), _coord(hydrogen), _coord(oxygen))
-            if np.isfinite(angle) and angle >= HBOND_ANGLE_DEG:
+            if np.isfinite(angle) and angle >= config.hydrogen_bond_angle:
                 legs[water].append(
                     _WaterLeg(water, donor, _distance(donor, oxygen), angle, "protein donor")
                 )
 
     for acceptor in (atom for atom in protein_atoms if _is_acceptor(atom, adjacency)):
-        for oxygen in water_search.search(_coord(acceptor), HBOND_DISTANCE_A, level="A"):
+        for oxygen in water_search.search(
+            _coord(acceptor), config.hydrogen_bond_distance, level="A"
+        ):
             water, hydrogens = site_by_oxygen[oxygen]
             angles = [
                 _angle_degrees(_coord(oxygen), _coord(hydrogen), _coord(acceptor))
                 for hydrogen in hydrogens
             ]
             valid_angles = [angle for angle in angles if np.isfinite(angle)]
-            if valid_angles and max(valid_angles) >= HBOND_ANGLE_DEG:
+            if valid_angles and max(valid_angles) >= config.hydrogen_bond_angle:
                 legs[water].append(
                     _WaterLeg(
                         water, acceptor, _distance(oxygen, acceptor),
                         max(valid_angles), "water donor",
+                    )
+                )
+            elif not hydrogens and config.refined_geometry:
+                distance = _distance(oxygen, acceptor)
+                legs[water].append(
+                    _WaterLeg(
+                        water,
+                        acceptor,
+                        distance,
+                        float("nan"),
+                        "water donor orientation unknown",
+                        "distance_candidate",
                     )
                 )
     return legs
@@ -685,23 +1118,74 @@ def _water_bridges(
     atoms_b: list[Atom],
     water_residues: list[Residue],
     adjacency: dict[Any, list[Any]],
+    config: ContactConfig,
 ) -> list[_Observation]:
-    legs_a = _protein_water_legs(atoms_a, water_residues, adjacency)
-    legs_b = _protein_water_legs(atoms_b, water_residues, adjacency)
+    legs_a = _protein_water_legs(atoms_a, water_residues, adjacency, config)
+    legs_b = _protein_water_legs(atoms_b, water_residues, adjacency, config)
     water_order = {water: index for index, water in enumerate(water_residues)}
     records = []
     for water in sorted(set(legs_a) & set(legs_b), key=water_order.__getitem__):
         for leg_a in legs_a[water]:
             for leg_b in legs_b[water]:
+                angles = [angle for angle in (leg_a.angle, leg_b.angle) if np.isfinite(angle)]
+                minimum_angle = min(angles) if angles else None
+                evidence = (
+                    "distance_candidate"
+                    if "distance_candidate" in {leg_a.evidence_level, leg_b.evidence_level}
+                    else "explicit_geometry"
+                )
+                measurements = [
+                    ("leg_a_distance", leg_a.distance, "angstrom"),
+                    ("leg_b_distance", leg_b.distance, "angstrom"),
+                ]
+                if np.isfinite(leg_a.angle):
+                    measurements.append(("leg_a_angle", leg_a.angle, "degree"))
+                if np.isfinite(leg_b.angle):
+                    measurements.append(("leg_b_angle", leg_b.angle, "degree"))
                 records.append(
                     _Observation(
                         "water_bridge",
                         leg_a.protein_atom.get_parent(),
                         leg_b.protein_atom.get_parent(),
                         leg_a.protein_atom.get_name(), leg_b.protein_atom.get_name(),
-                        max(leg_a.distance, leg_b.distance), min(leg_a.angle, leg_b.angle),
+                        max(leg_a.distance, leg_b.distance), minimum_angle,
                         f"chain A: {leg_a.direction}; chain B: {leg_b.direction}",
                         _water_label(water),
+                        measurements=tuple(measurements),
+                        criteria=(
+                            (
+                                "leg_a_distance",
+                                leg_a.distance <= config.hydrogen_bond_distance,
+                                f"<= {config.hydrogen_bond_distance} angstrom",
+                            ),
+                            (
+                                "leg_b_distance",
+                                leg_b.distance <= config.hydrogen_bond_distance,
+                                f"<= {config.hydrogen_bond_distance} angstrom",
+                            ),
+                            (
+                                "joint_orientation",
+                                evidence == "explicit_geometry",
+                                "both bridge legs orientation-supported",
+                            ),
+                        ),
+                        role_a=(
+                            "donor"
+                            if leg_a.direction.startswith("protein donor")
+                            else "acceptor"
+                        ),
+                        role_b=(
+                            "donor"
+                            if leg_b.direction.startswith("protein donor")
+                            else "acceptor"
+                        ),
+                        evidence_level=evidence,
+                        quality_flags=(
+                            ("unoriented_water",)
+                            if evidence == "distance_candidate"
+                            else ()
+                        ),
+                        water=water,
                     )
                 )
     return records
@@ -740,6 +1224,10 @@ def _record(
     chain_b: str,
     observation: _Observation,
 ) -> dict[str, Any]:
+    measurement_values = {name: float(value) for name, value, _ in observation.measurements}
+    measurement_units = {name: unit for name, _, unit in observation.measurements}
+    satisfied = [name for name, status, _ in observation.criteria if status]
+    violated = [name for name, status, _ in observation.criteria if not status]
     return {
         "structure_id": getattr(structure, "id", None),
         "interaction_type": observation.interaction_type,
@@ -757,6 +1245,32 @@ def _record(
         "angle": float(observation.angle) if observation.angle is not None else None,
         "geometry": observation.geometry,
         "mediator": observation.mediator,
+        "geometry_metrics": measurement_values,
+        "geometry_units": measurement_units,
+        "roles": {"a": observation.role_a, "b": observation.role_b},
+        "satisfied_criteria": satisfied,
+        "violated_criteria": violated,
+        "evidence_level": observation.evidence_level,
+        "quality_flags": list(observation.quality_flags),
+        "observation_count": observation.member_count,
+        "independent_group_count": observation.independent_group_count,
+        "distance_statistics": {
+            "min": (
+                observation.distance_min
+                if observation.distance_min is not None
+                else observation.distance
+            ),
+            "median": (
+                observation.distance_median
+                if observation.distance_median is not None
+                else observation.distance
+            ),
+            "max": (
+                observation.distance_max
+                if observation.distance_max is not None
+                else observation.distance
+            ),
+        },
     }
 
 
@@ -780,18 +1294,19 @@ def _aggregate(observations: list[_Observation]) -> list[_Observation]:
             ),
         )
         mediators = sorted({item.mediator for item in candidates if item.mediator})
-        if mediators:
-            representative = _Observation(
-                representative.interaction_type,
-                representative.residue_a,
-                representative.residue_b,
-                representative.atom_a,
-                representative.atom_b,
-                representative.distance,
-                representative.angle,
-                representative.geometry,
-                ",".join(mediators),
-            )
+        distances = [item.distance for item in candidates if item.distance is not None]
+        physical_groups = {
+            (item.atom_a, item.atom_b, item.mediator) for item in candidates
+        }
+        representative = replace(
+            representative,
+            mediator=",".join(mediators) if mediators else representative.mediator,
+            member_count=len(candidates),
+            independent_group_count=len(physical_groups),
+            distance_min=min(distances) if distances else None,
+            distance_median=float(np.median(distances)) if distances else None,
+            distance_max=max(distances) if distances else None,
+        )
         result.append(representative)
     return result
 
@@ -810,7 +1325,10 @@ def _detect_contact_observations(
     water_bridge: bool,
     pi_stacking_t_shaped: bool,
     topology_backend: str,
+    config: ContactConfig | None = None,
+    adjacency_override: Any | None = None,
 ) -> list[_Observation]:
+    config = config or get_contact_config()
     atoms_a = [atom for residue in residues_a for atom in residue.get_atoms()]
     atoms_b = [atom for residue in residues_b for atom in residue.get_atoms()]
     water_residues = [
@@ -826,30 +1344,28 @@ def _detect_contact_observations(
             + (water_residues if water_bridge else [])
         )
     )
-    adjacency = _build_bond_adjacency(
-        model,
-        topology_residues,
-        topology_backend,
+    adjacency = adjacency_override or _build_bond_adjacency(
+        model, topology_residues, topology_backend
     )
 
     include_charged = salt_bridge or cation_pi_candidate
-    groups_a = _charged_groups(residues_a, adjacency) if include_charged else []
-    groups_b = _charged_groups(residues_b, adjacency) if include_charged else []
+    groups_a = _charged_groups(residues_a, adjacency, config) if include_charged else []
+    groups_b = _charged_groups(residues_b, adjacency, config) if include_charged else []
     include_aromatic = (
         pi_stacking_parallel or pi_stacking_t_shaped or cation_pi_candidate
     )
-    rings_a = _aromatic_rings(residues_a) if include_aromatic else []
-    rings_b = _aromatic_rings(residues_b) if include_aromatic else []
+    rings_a = _aromatic_rings(residues_a, config) if include_aromatic else []
+    rings_b = _aromatic_rings(residues_b, config) if include_aromatic else []
 
     observations: list[_Observation] = []
     if hydrogen_bond:
-        observations.extend(_hydrogen_bonds(atoms_a, atoms_b, adjacency))
+        observations.extend(_hydrogen_bonds(atoms_a, atoms_b, adjacency, config))
     if salt_bridge:
-        observations.extend(_salt_bridges(groups_a, groups_b))
+        observations.extend(_salt_bridges(groups_a, groups_b, config))
     if hydrophobic_contact:
-        observations.extend(_hydrophobic_contacts(atoms_a, atoms_b, adjacency))
+        observations.extend(_hydrophobic_contacts(atoms_a, atoms_b, adjacency, config))
     if van_der_waals_contact:
-        observations.extend(_vdw_contacts(atoms_a, atoms_b))
+        observations.extend(_vdw_contacts(atoms_a, atoms_b, adjacency, config))
     if include_aromatic:
         observations.extend(
             _aromatic_interactions(
@@ -860,6 +1376,7 @@ def _detect_contact_observations(
                 pi_stacking_parallel,
                 pi_stacking_t_shaped,
                 cation_pi_candidate,
+                config,
             )
         )
     if water_bridge:
@@ -869,6 +1386,7 @@ def _detect_contact_observations(
                 atoms_b,
                 water_residues,
                 adjacency,
+                config,
             )
         )
     return observations
@@ -904,6 +1422,7 @@ def characterize_intrachain_contacts_impl(
     water_bridge: bool = True,
     pi_stacking_t_shaped: bool = True,
     topology_backend: str = "templates",
+    profile: str | ContactConfig = "refined",
 ) -> list[dict[str, Any]]:
     """Characterize unique noncovalent residue pairs within one chain."""
     if (
@@ -914,6 +1433,7 @@ def characterize_intrachain_contacts_impl(
         raise ValueError("min_sequence_separation must be an integer >= 1")
 
     model, chain_object = _select_model_and_chain(structure, chain)
+    config = get_contact_config(profile)
     residues = [
         residue
         for residue in chain_object.get_residues()
@@ -933,6 +1453,7 @@ def characterize_intrachain_contacts_impl(
         water_bridge=water_bridge,
         pi_stacking_t_shaped=pi_stacking_t_shaped,
         topology_backend=topology_backend,
+        config=config,
     )
 
     normalized = []
@@ -944,23 +1465,32 @@ def characterize_intrachain_contacts_impl(
         if abs(index_a - index_b) < min_sequence_separation:
             continue
         if index_a > index_b:
-            observation = _Observation(
-                observation.interaction_type,
-                observation.residue_b,
-                observation.residue_a,
-                observation.atom_b,
-                observation.atom_a,
-                observation.distance,
-                observation.angle,
-                observation.geometry,
-                observation.mediator,
+            geometry = observation.geometry
+            if geometry:
+                geometry = (
+                    geometry.replace("chain A", "__partner__")
+                    .replace("chain B", "chain A")
+                    .replace("__partner__", "chain B")
+                )
+            observation = replace(
+                observation,
+                residue_a=observation.residue_b,
+                residue_b=observation.residue_a,
+                atom_a=observation.atom_b,
+                atom_b=observation.atom_a,
+                role_a=observation.role_b,
+                role_b=observation.role_a,
+                geometry=geometry,
             )
         normalized.append(observation)
 
-    return [
+    records = [
         _record(structure, chain, chain, observation)
         for observation in _aggregate(normalized)
     ]
+    for record in records:
+        record["rule_profile"] = config.name
+    return records
 
 
 def characterize_chain_contacts_impl(
@@ -977,8 +1507,10 @@ def characterize_chain_contacts_impl(
     water_bridge: bool = True,
     pi_stacking_t_shaped: bool = True,
     topology_backend: str = "templates",
+    profile: str | ContactConfig = "refined",
 ) -> list[dict[str, Any]]:
     """Implement :func:`biotools.structure.geometry.characterize_chain_contacts`."""
+    config = get_contact_config(profile)
     model, chain_object_a, chain_object_b = _select_model_and_chains(structure, chain_a, chain_b)
     residues_a = [
         residue
@@ -1003,8 +1535,12 @@ def characterize_chain_contacts_impl(
         water_bridge=water_bridge,
         pi_stacking_t_shaped=pi_stacking_t_shaped,
         topology_backend=topology_backend,
+        config=config,
     )
 
     if not atomic:
         observations = _aggregate(observations)
-    return [_record(structure, chain_a, chain_b, observation) for observation in observations]
+    records = [_record(structure, chain_a, chain_b, observation) for observation in observations]
+    for record in records:
+        record["rule_profile"] = config.name
+    return records

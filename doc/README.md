@@ -9,6 +9,7 @@
   - Structure I/O and metadata
   - Chain manipulation and alignment
   - DSSP, FreeSASA, contacts, matrices, and visualization
+  - [Interaction types and calculations](structure/interactions.md)
 - [Sequences](sequence/README.md)
   - Global alignment
   - FASTA files

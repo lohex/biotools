@@ -6,6 +6,34 @@ release is published.
 
 ## Unreleased
 
+### Added
+
+- Added a typed, serializable contact-analysis API with stable atom identities,
+  named criterion profiles, structured roles and geometry, preparation
+  diagnostics, coverage, and reproducibility hashes.
+- Added deterministic local orientation, proposal, geometric refinement, and
+  independent re-evaluation of single-water bridges without an external
+  hydration dependency.
+- Added an optional fixed-solute, rigid-water OpenMM energy-refinement backend
+  with explicit parameterization and nonfinite-energy failures.
+- Added a complete interaction reference covering all eight interaction types,
+  their calculations, thresholds, refinements, aggregation, and migration
+  behavior.
+
+### Changed
+
+- Refined contact chemistry and geometry: topology-derived termini and
+  covalent exclusions, explicit thiolate/disulfide handling, van der Waals gap
+  and clash reporting, separate tryptophan rings, ring planarity and projection
+  checks, directional cation-pi filtering, and explicit water-bridge evidence.
+- Extended compatibility contact records with named/unit-bearing geometry,
+  structured roles and criteria, quality flags, aggregation counts and distance
+  statistics, and the applied rule profile.
+- Simplified the built-in contact profile names to `refined` and `legacy`.
+- Clarified optional dependency installation and documented exactly when
+  existing or missing water bridges are evaluated, how both local-refinement
+  backends score candidates, and why neither requires a complete solvent box.
+
 ### Fixed
 
 - Added compatibility with both upstream and Ubuntu/Debian FreeSASA CLI depth
