@@ -13,6 +13,7 @@ from biotools.mdtools import (
     EquilibrationSample,
     StabilityMonitor,
     equilibrate,
+    minimize,
     soft_equilibrate_nvt,
 )
 
@@ -236,6 +237,7 @@ class EquilibrateTests(unittest.TestCase):
             input_path = Path(temp_dir) / "periodic.pdb"
             nvt_path = Path(temp_dir) / "nvt.pdb"
             nvt_state_path = Path(temp_dir) / "nvt-state.xml"
+            nvt_checkpoint_path = Path(temp_dir) / "nvt.chk"
             output_path = Path(temp_dir) / "equilibrated.pdb"
             with input_path.open("w") as output:
                 PDBFile.writeFile(
@@ -243,7 +245,7 @@ class EquilibrateTests(unittest.TestCase):
                     modeller.positions,
                     output,
                 )
-            equilibrate(
+            nvt = equilibrate(
                 input_path,
                 nvt_path,
                 ensemble="NVT",
@@ -255,10 +257,11 @@ class EquilibrateTests(unittest.TestCase):
                 random_seed=11,
                 monitor=lambda progress: True,
                 state_output_file=nvt_state_path,
+                checkpoint_output_file=nvt_checkpoint_path,
                 verbose=False,
             )
             result = equilibrate(
-                nvt_path,
+                nvt,
                 output_path,
                 ensemble="NPT",
                 max_steps=2,
@@ -269,7 +272,6 @@ class EquilibrateTests(unittest.TestCase):
                 nonbonded_cutoff_nm=0.5,
                 random_seed=11,
                 monitor=lambda progress: True,
-                state_input_file=nvt_state_path,
                 verbose=False,
             )
 
@@ -282,6 +284,9 @@ class EquilibrateTests(unittest.TestCase):
         self.assertEqual(result.initial_step, 2)
         self.assertEqual(result.final_step, 4)
         self.assertEqual(result.final_sample.step, 4)
+        self.assertEqual(result.resume_mode, "state")
+        self.assertEqual(result.input_state_path, nvt_state_path)
+        self.assertIsNone(result.input_checkpoint_path)
 
     def test_resume_inputs_are_mutually_exclusive(self) -> None:
         input_path = Path(__file__).with_name("data") / "water.pdb"
@@ -301,6 +306,38 @@ class EquilibrateTests(unittest.TestCase):
 
 
 class SoftEquilibrateNVTTests(unittest.TestCase):
+    def test_accepts_minimization_result_directly(self) -> None:
+        input_path = Path(__file__).with_name("data") / "water.pdb"
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            minimized = minimize(
+                input_path,
+                temp_path / "minimized.pdb",
+                max_iterations=1,
+                forcefield_files=("amber14/tip3pfb.xml",),
+                return_diagnostics=True,
+                verbose=False,
+            )
+            result = soft_equilibrate_nvt(
+                minimized,
+                temp_path / "soft-equilibrated.pdb",
+                initial_temperature_k=50.0,
+                temperature_k=300.0,
+                initial_timestep_fs=0.25,
+                timestep_fs=1.0,
+                heating_steps=2,
+                heating_stages=2,
+                max_steps=3,
+                check_interval_steps=1,
+                monitor=lambda progress: True,
+                forcefield_files=("amber14/tip3pfb.xml",),
+                random_seed=13,
+                verbose=False,
+            )
+
+        self.assertEqual(result.steps, 3)
+        self.assertEqual(result.resume_mode, "coordinates")
+
     def test_soft_nvt_ramps_temperature_and_timestep_in_one_run(self) -> None:
         input_path = Path(__file__).with_name("data") / "water.pdb"
         with TemporaryDirectory() as temp_dir:

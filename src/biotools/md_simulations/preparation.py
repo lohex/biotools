@@ -11,13 +11,13 @@ from openmm.app import ForceField, Modeller, PDBFile
 from openmm.unit import molar, nanometer
 from pdbfixer import PDBFixer
 
-from .common import validate_io_paths
+from .common import MDInput, validate_io_paths
 
 logger = logging.getLogger(__name__)
 
 
 def model_solvent(
-    input_file: str | PathLike[str],
+    input_file: MDInput,
     output_file: str | PathLike[str],
     *,
     ph: float = 7.0,
@@ -71,7 +71,7 @@ def model_solvent(
 
 
 def fix_pdb(
-    input_file: str | PathLike[str],
+    input_file: MDInput,
     output_file: str | PathLike[str],
     *,
     add_missing_residues: bool = False,

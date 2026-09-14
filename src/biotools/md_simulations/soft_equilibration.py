@@ -10,7 +10,12 @@ from openmm import LangevinMiddleIntegrator
 from openmm.app import ForceField, HBonds, NoCutoff, PDBFile, PME, Simulation
 from openmm.unit import femtoseconds, kelvin, nanometer, picosecond
 
-from .common import simulation_platform_options, validate_io_paths
+from .common import (
+    MDInput,
+    simulation_config,
+    simulation_platform_options,
+    validate_io_paths,
+)
 from .equilibration import (
     EquilibrationAssessment,
     EquilibrationCriteria,
@@ -40,7 +45,7 @@ def _stage_step_counts(total_steps: int, stages: int) -> tuple[int, ...]:
 
 
 def soft_equilibrate_nvt(
-    input_file: str | PathLike[str],
+    input_file: MDInput,
     output_file: str | PathLike[str],
     *,
     initial_temperature_k: float = 50.0,
@@ -256,6 +261,19 @@ def soft_equilibrate_nvt(
             executed_steps,
             termination_reason,
         )
+    config = simulation_config(
+        simulation,
+        system,
+        integrator,
+        ensemble="NVT",
+        temperature_k=temperature_k,
+        pressure_bar=None,
+        timestep_fs=timestep_fs,
+        friction_per_ps=friction_per_ps,
+        forcefield_files=tuple(forcefield_files),
+        nonbonded_cutoff_nm=nonbonded_cutoff_nm,
+        barostat_interval_steps=None,
+    )
     return EquilibrationResult(
         output_path=output_path,
         ensemble="NVT",
@@ -276,4 +294,6 @@ def soft_equilibrate_nvt(
         target_timestep_fs=timestep_fs,
         initial_step=0,
         final_step=simulation.currentStep,
+        simulation_config=config,
+        resume_mode="coordinates",
     )

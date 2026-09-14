@@ -1,12 +1,18 @@
-"""Public molecular-dynamics preparation and equilibration API.
+"""Public molecular-dynamics preparation and simulation API.
 
 Implementation details live in small modules under
 :mod:`biotools.md_simulations`.  This facade preserves the established
 ``biotools.mdtools`` import path.
 """
 
-from .md_simulations.equilibration import (
+from .md_simulations.common import (
     Ensemble,
+    MDInput,
+    MDStageResult,
+    ResumeMode,
+    SimulationConfig,
+)
+from .md_simulations.equilibration import (
     EquilibrationAssessment,
     EquilibrationCriteria,
     EquilibrationMonitor,
@@ -28,6 +34,7 @@ from .md_simulations.minimization import (
 )
 from .md_simulations.plotting import plot_md_result
 from .md_simulations.preparation import fix_pdb, model_solvent
+from .md_simulations.production import ProductionResult, run_production
 from .md_simulations.soft_equilibration import soft_equilibrate_nvt
 
 __all__ = [
@@ -38,14 +45,20 @@ __all__ = [
     "EquilibrationProgress",
     "EquilibrationResult",
     "EquilibrationSample",
+    "MDInput",
+    "MDStageResult",
     "MinimizationResult",
     "MinimizationSample",
     "MonitorCallback",
+    "ProductionResult",
+    "ResumeMode",
+    "SimulationConfig",
     "StabilityMonitor",
     "equilibrate",
     "fix_pdb",
     "minimize",
     "model_solvent",
     "plot_md_result",
+    "run_production",
     "soft_equilibrate_nvt",
 ]

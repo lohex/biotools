@@ -8,6 +8,9 @@ release is published.
 
 ### Added
 
+- Added fixed-length NVT/NPT production runs with DCD or XTC trajectories,
+  CSV thermodynamics reporting, periodic checkpoints, continuation support,
+  and structured result metadata.
 - Added a typed, serializable contact-analysis API with stable atom identities,
   named criterion profiles, structured roles and geometry, preparation
   diagnostics, coverage, and reproducibility hashes.
@@ -22,6 +25,9 @@ release is published.
 
 ### Changed
 
+- Made MD pipeline stages accept preceding result objects directly, with
+  configurable automatic selection between coordinates, XML States, and
+  configuration-verified checkpoints.
 - Refined contact chemistry and geometry: topology-derived termini and
   covalent exclusions, explicit thiolate/disulfide handling, van der Waals gap
   and clash reporting, separate tryptophan rings, ring planarity and projection

@@ -12,7 +12,7 @@ scripts and notebooks rather than a command-line application.
 | --- | --- | --- |
 | `biotools.structure` | Structure I/O, chain manipulation, alignment, geometric contacts, distance and interaction matrices, DSSP, FreeSASA, and visualization | [Structure guide](doc/structure/README.md) |
 | `biotools.sequence` | Protein-sequence alignment, FASTA utilities, and local BLAST searches | [Sequence guide](doc/sequence/README.md) |
-| `biotools.mdtools` | OpenMM-based structure preparation, minimization, equilibration, restart support, and diagnostic plots | [Molecular-dynamics guide](doc/md/README.md) |
+| `biotools.mdtools` | OpenMM-based preparation, minimization, equilibration, fixed-length production trajectories, restart support, and diagnostic plots | [Molecular-dynamics guide](doc/md/README.md) |
 
 The implementation is organized into focused submodules. The original
 `biotools.pdbtools` and `biotools.seqtools` modules remain available as

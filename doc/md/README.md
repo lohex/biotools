@@ -6,6 +6,7 @@
 
 - [Installation](#installation)
 - [Workflow overview](#workflow-overview)
+- [Result-aware pipeline chaining](#result-aware-pipeline-chaining)
 - [Prepare a structure](#prepare-a-structure)
   - [Repair a PDB](#repair-a-pdb)
   - [Add solvent and ions](#add-solvent-and-ions)
@@ -18,12 +19,14 @@
   - [Default convergence monitoring](#default-convergence-monitoring)
   - [Custom convergence monitoring](#custom-convergence-monitoring)
 - [States, checkpoints, and continuation](#states-checkpoints-and-continuation)
+- [Production runs](#production-runs)
 - [Diagnostic plots](#diagnostic-plots)
 - [Platform selection](#platform-selection)
 - [Logging](#logging)
 
 `biotools.mdtools` provides OpenMM-based structure preparation, energy
-minimization, NVT/NPT equilibration, continuation files, and diagnostic plots.
+minimization, NVT/NPT equilibration and production runs, continuation files,
+trajectories, and diagnostic plots.
 
 ## Installation
 
@@ -54,11 +57,73 @@ A typical explicit-solvent workflow is:
 3. remove unfavorable contacts with `minimize()`;
 4. gently heat and equilibrate at constant volume with
    `soft_equilibrate_nvt()`; and
-5. equilibrate density and box volume with `equilibrate(..., ensemble="NPT")`.
+5. equilibrate density and box volume with `equilibrate(..., ensemble="NPT")`;
+   and
+6. collect a fixed-length trajectory with `run_production()`.
 
 The appropriate preparation, force field, protonation state, ensembles, and
 convergence criteria depend on the scientific system. The helpers do not
 replace validation of the resulting model and trajectory.
+
+## Result-aware pipeline chaining
+
+Every MD stage accepts either a PDB path or the result returned by the previous
+stage. Preparation helpers return paths directly; diagnostic minimization,
+equilibration, and production return objects whose `output_path` is resolved
+automatically:
+
+```python
+from biotools.mdtools import (
+    equilibrate,
+    fix_pdb,
+    minimize,
+    model_solvent,
+    run_production,
+    soft_equilibrate_nvt,
+)
+
+fixed = fix_pdb("input.pdb", "fixed.pdb")
+solvated = model_solvent(fixed, "solvated.pdb")
+minimized = minimize(
+    solvated,
+    "minimized.pdb",
+    return_diagnostics=True,
+)
+soft_nvt = soft_equilibrate_nvt(
+    minimized,
+    "nvt.pdb",
+    state_output_file="nvt-state.xml",
+)
+npt = equilibrate(
+    soft_nvt,
+    "npt.pdb",
+    ensemble="NPT",
+    state_output_file="npt-state.xml",
+    checkpoint_output_file="npt.chk",
+)
+production = run_production(
+    npt,
+    "production-final.pdb",
+    trajectory_file="production.xtc",
+    steps=5_000_000,
+    ensemble="NPT",
+    checkpoint_output_file="production.chk",
+)
+```
+
+Dynamic results contain a `SimulationConfig` with hashes of the OpenMM System
+and Integrator plus the selected platform. With the default
+`resume_from="auto"`, the next stage uses a checkpoint only when those values
+are compatible. Otherwise it uses the XML State, which permits transitions
+such as NVT to NPT. Results without restart files, such as minimization
+results, naturally pass only their final coordinates.
+
+Set `resume_from="state"`, `"checkpoint"`, or `"coordinates"` to request a
+specific behavior. Explicit `state_input_file` and `checkpoint_input_file`
+arguments remain supported. An incompatible checkpoint without an XML State
+raises an error rather than silently discarding velocities; use
+`resume_from="coordinates"` when reinitializing from the final structure is
+intentional.
 
 ## Prepare a structure
 
@@ -184,10 +249,9 @@ soft_nvt = soft_equilibrate_nvt(
 )
 
 npt = equilibrate(
-    "nvt.pdb",
+    soft_nvt,
     "equilibrated.pdb",
     ensemble="NPT",
-    state_input_file="nvt-state.xml",
     temperature_k=300.0,
     pressure_bar=1.0,
     max_steps=1_000_000,
@@ -312,6 +376,66 @@ The two input formats are mutually exclusive. `max_steps` is always the
 additional step budget for the current call. `result.initial_step` and
 `result.final_step` expose cumulative OpenMM step numbers, while
 `result.steps` contains the number executed by that call.
+
+## Production runs
+
+`run_production()` executes a fixed number of additional steps without an
+equilibration monitor. The trajectory filename selects DCD or XTC format. A
+CSV thermodynamics log and portable final XML State are optional. When a
+checkpoint output is supplied, it is replaced periodically and saved once
+more after the final step:
+
+```python
+from biotools.mdtools import run_production
+
+production = run_production(
+    npt,
+    "production-final.pdb",
+    trajectory_file="production.dcd",
+    steps=5_000_000,
+    ensemble="NPT",
+    temperature_k=300.0,
+    pressure_bar=1.0,
+    trajectory_interval_steps=5_000,
+    log_file="production.csv",
+    log_interval_steps=5_000,
+    checkpoint_output_file="production.chk",
+    checkpoint_interval_steps=50_000,
+)
+
+print(production.initial_step, production.final_step)
+print(production.elapsed_time_ps, production.trajectory_path)
+```
+
+`steps` is deliberately required so that the scientific sampling length is
+always explicit. Loading the final equilibration XML State preserves its
+positions, velocities, box, time, and step number while applying the requested
+production temperature and timestep. An exact checkpoint continuation instead
+requires the same compatible OpenMM system, integrator, force field,
+constraints, and barostat configuration.
+
+To extend the same trajectory and CSV log after an interrupted or segmented
+run, load a State or checkpoint and pass `append=True`. The files must already
+exist. Without `append=True`, reporter files are replaced, which is useful for
+starting a separate production segment:
+
+```python
+continued = run_production(
+    production,
+    "production-final-2.pdb",
+    trajectory_file="production.dcd",
+    log_file="production.csv",
+    steps=5_000_000,
+    ensemble="NPT",
+    checkpoint_output_file="production.chk",
+    append=True,
+)
+```
+
+The final PDB is a coordinate snapshot and does not contain velocities. Keep
+the XML State for portable state transfer or the checkpoint for exact restart.
+Periodic checkpointing limits lost work if a run is interrupted, but does not
+make incompatible simulation configurations interchangeable.
 
 ## Diagnostic plots
 

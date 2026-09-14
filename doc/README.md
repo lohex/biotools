@@ -17,7 +17,7 @@
 - [Molecular dynamics](md/README.md)
   - Structure preparation
   - Minimization and equilibration
-  - Restart files and diagnostic plots
+  - Production trajectories, restart files, and diagnostic plots
 
 Each module guide documents its own requirements, public entry points, and
 typical workflows.

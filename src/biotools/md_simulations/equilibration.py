@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from os import PathLike
 from pathlib import Path
-from typing import Literal, Protocol, TypeAlias
+from typing import Protocol, TypeAlias
 
 import numpy as np
 from openmm import CMMotionRemover, LangevinMiddleIntegrator, MonteCarloBarostat
@@ -27,12 +27,19 @@ from openmm.unit import (
     picosecond,
 )
 
-from .common import simulation_platform_options, validate_io_paths
+from .common import (
+    Ensemble,
+    MDInput,
+    ResolvedResumeMode,
+    ResumeMode,
+    SimulationConfig,
+    resolve_resume_input,
+    simulation_config,
+    simulation_platform_options,
+    validate_io_paths,
+)
 
 logger = logging.getLogger(__name__)
-
-Ensemble: TypeAlias = Literal["NVT", "NPT"]
-
 
 @dataclass(frozen=True)
 class EquilibrationSample:
@@ -170,6 +177,8 @@ class EquilibrationResult:
     input_checkpoint_path: Path | None = None
     initial_step: int = 0
     final_step: int = 0
+    simulation_config: SimulationConfig | None = None
+    resume_mode: ResolvedResumeMode = "coordinates"
 
     @property
     def converged(self) -> bool:
@@ -463,32 +472,6 @@ def _validate_auxiliary_output_paths(
     return state_path, checkpoint_path
 
 
-def _validate_resume_input_paths(
-    state_input_file: str | PathLike[str] | None,
-    checkpoint_input_file: str | PathLike[str] | None,
-) -> tuple[Path | None, Path | None]:
-    """Validate mutually exclusive XML State and checkpoint inputs."""
-    if state_input_file is not None and checkpoint_input_file is not None:
-        raise ValueError(
-            "state_input_file and checkpoint_input_file are mutually exclusive"
-        )
-    state_input_path = (
-        Path(state_input_file) if state_input_file is not None else None
-    )
-    checkpoint_input_path = (
-        Path(checkpoint_input_file)
-        if checkpoint_input_file is not None
-        else None
-    )
-    for name, path in (
-        ("state_input_file", state_input_path),
-        ("checkpoint_input_file", checkpoint_input_path),
-    ):
-        if path is not None and not path.is_file():
-            raise FileNotFoundError(f"{name} not found: {path}")
-    return state_input_path, checkpoint_input_path
-
-
 def _write_equilibration_outputs(
     simulation: Simulation,
     *,
@@ -518,7 +501,7 @@ def _write_equilibration_outputs(
 
 
 def equilibrate(
-    input_file: str | PathLike[str],
+    input_file: MDInput,
     output_file: str | PathLike[str],
     *,
     ensemble: str = "NPT",
@@ -541,23 +524,21 @@ def equilibrate(
     random_seed: int | None = None,
     state_input_file: str | PathLike[str] | None = None,
     checkpoint_input_file: str | PathLike[str] | None = None,
+    resume_from: ResumeMode = "auto",
     state_output_file: str | PathLike[str] | None = None,
     checkpoint_output_file: str | PathLike[str] | None = None,
     keep_ids: bool = False,
     verbose: bool = True,
 ) -> EquilibrationResult:
-    """Equilibrate a minimized PDB adaptively in the NVT or NPT ensemble.
+    """Equilibrate a PDB or preceding MD result in the NVT or NPT ensemble.
 
     Dynamics run in blocks.  After each block, ``monitor`` receives all sampled
     thermodynamic states and may stop the run.  Without a custom monitor,
     :class:`StabilityMonitor` checks temperature and energy stability, plus
     volume stability for NPT.  The run always ends no later than ``max_steps``.
+    Result inputs automatically supply a compatible checkpoint or XML State.
     """
     input_path, output_path = validate_io_paths(input_file, output_file)
-    state_input_path, checkpoint_input_path = _validate_resume_input_paths(
-        state_input_file,
-        checkpoint_input_file,
-    )
     state_path, checkpoint_path = _validate_auxiliary_output_paths(
         input_path,
         output_path,
@@ -635,6 +616,32 @@ def equilibrate(
         integrator.setRandomNumberSeed(random_seed)
     simulation = Simulation(
         pdb.topology, system, integrator, **simulation_options
+    )
+    config = simulation_config(
+        simulation,
+        system,
+        integrator,
+        ensemble=selected_ensemble,
+        temperature_k=temperature_k,
+        pressure_bar=(
+            pressure_bar if selected_ensemble == "NPT" else None
+        ),
+        timestep_fs=timestep_fs,
+        friction_per_ps=friction_per_ps,
+        forcefield_files=tuple(forcefield_files),
+        nonbonded_cutoff_nm=nonbonded_cutoff_nm,
+        barostat_interval_steps=(
+            barostat_interval_steps if selected_ensemble == "NPT" else None
+        ),
+    )
+    state_input_path, checkpoint_input_path, resume_mode = (
+        resolve_resume_input(
+            input_file,
+            state_input_file=state_input_file,
+            checkpoint_input_file=checkpoint_input_file,
+            resume_from=resume_from,
+            target_config=config,
+        )
     )
     if state_input_path is not None:
         try:
@@ -770,4 +777,6 @@ def equilibrate(
         input_checkpoint_path=checkpoint_input_path,
         initial_step=initial_step,
         final_step=simulation.currentStep,
+        simulation_config=config,
+        resume_mode=resume_mode,
     )

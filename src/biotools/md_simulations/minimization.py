@@ -14,7 +14,7 @@ from openmm import MinimizationReporter, VerletIntegrator
 from openmm.app import ForceField, HBonds, NoCutoff, PDBFile, PME, Simulation
 from openmm.unit import kilojoule_per_mole, nanometer, picoseconds
 
-from .common import simulation_platform_options, validate_io_paths
+from .common import MDInput, simulation_platform_options, validate_io_paths
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +184,7 @@ def _get_raw_state_diagnostics(context) -> tuple[float, float, float]:
 
 
 def minimize(
-    input_file: str | PathLike[str],
+    input_file: MDInput,
     output_file: str | PathLike[str],
     *,
     forcefield_files: Sequence[str] = (
