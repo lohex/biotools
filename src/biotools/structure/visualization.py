@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
+from html import escape
 from io import StringIO
 from typing import Any, Literal, TYPE_CHECKING, TypeAlias
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib import colormaps
+from matplotlib.colors import (
+    BoundaryNorm,
+    ListedColormap,
+    Normalize,
+    to_hex,
+    to_rgba,
+    TwoSlopeNorm,
+)
 from matplotlib.patches import Patch
 import numpy as np
 from numpy.typing import NDArray
@@ -17,6 +27,14 @@ from .matrices import (
     _residue_label,
     get_distance_matrix,
     get_interchain_distance_matrix,
+)
+from .molecular_surface import (
+    color_from_labels,
+    MolecularSurfaceMesh,
+    MolecularSurfaceResult,
+    SurfacePatch,
+    SurfacePatchSet,
+    SurfaceSamples,
 )
 
 if TYPE_CHECKING:
@@ -37,6 +55,13 @@ InteractionMeasure: TypeAlias = Literal[
     "cation_pi_candidate",
     "water_bridge",
     "interaction_type",
+]
+StructureStyle: TypeAlias = Literal[
+    "cartoon",
+    "stick",
+    "cartoon+stick",
+    "line",
+    "none",
 ]
 
 _DISTANCE_MEASURES = {"c_alpha", "c_beta", "min_heavy_atom"}
@@ -76,6 +101,16 @@ _CONTACT_TYPE_LABELS = {
 }
 
 
+def _structure_pdb_text(structure: Structure) -> str:
+    from Bio.PDB import PDBIO
+
+    buffer = StringIO()
+    io = PDBIO()
+    io.set_structure(structure)
+    io.save(buffer)
+    return buffer.getvalue()
+
+
 def plot_structure(structure: Structure) -> Any:
     """Create an interactive ``py3Dmol`` view for a structure.
 
@@ -86,17 +121,355 @@ def plot_structure(structure: Structure) -> Any:
         Configured ``py3Dmol.view`` instance.
     """
     import py3Dmol
-    from Bio.PDB import PDBIO
-
-    buffer = StringIO()
-    io = PDBIO()
-    io.set_structure(structure)
-    io.save(buffer)
 
     view = py3Dmol.view(width=800, height=400)
-    view.addModel(buffer.getvalue(), "pdb")
+    view.addModel(_structure_pdb_text(structure), "pdb")
     view.setStyle({"model": -1}, {"cartoon": {"color": "spectrum"}})
     view.zoomTo()
+    return view
+
+
+def _surface_mesh(
+    surface_obj: MolecularSurfaceResult | MolecularSurfaceMesh,
+    component_id: int | None,
+) -> MolecularSurfaceMesh:
+    if isinstance(surface_obj, MolecularSurfaceMesh):
+        if component_id is not None and component_id != surface_obj.component_id:
+            raise ValueError(
+                f"Mesh component {surface_obj.component_id} does not match "
+                f"component_id={component_id}"
+            )
+        return surface_obj
+    if isinstance(surface_obj, MolecularSurfaceResult):
+        if component_id is None:
+            return surface_obj.surface
+        return surface_obj.get_component(component_id)
+    raise TypeError(
+        "surface_obj must be a MolecularSurfaceResult or MolecularSurfaceMesh"
+    )
+
+
+def _structure_style_spec(
+    style: StructureStyle | Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    if isinstance(style, Mapping):
+        return dict(style)
+    styles: dict[str, Mapping[str, Any] | None] = {
+        "cartoon": {"cartoon": {"color": "spectrum"}},
+        "stick": {"stick": {"colorscheme": "Jmol", "radius": 0.18}},
+        "cartoon+stick": {
+            "cartoon": {"color": "spectrum"},
+            "stick": {"colorscheme": "Jmol", "radius": 0.15},
+        },
+        "line": {"line": {"colorscheme": "Jmol"}},
+        "none": None,
+    }
+    try:
+        return styles[style]
+    except KeyError as exc:
+        choices = ", ".join(styles)
+        raise ValueError(
+            f"Unknown structure_style {style!r}; choose from {choices}"
+        ) from exc
+
+
+def _rgb_records(colors: NDArray[np.float64]) -> list[dict[str, float]]:
+    return [
+        {"r": float(color[0]), "g": float(color[1]), "b": float(color[2])}
+        for color in colors
+    ]
+
+
+def _vector_records(vectors: NDArray[np.float64]) -> list[dict[str, float]]:
+    return [
+        {"x": float(vector[0]), "y": float(vector[1]), "z": float(vector[2])}
+        for vector in vectors
+    ]
+
+
+def _field_colors(
+    mesh: MolecularSurfaceMesh,
+    field_name: str,
+    *,
+    cmap: str,
+    field_range: tuple[float, float] | None,
+    field_center: float | None,
+    invalid_color: Any,
+    face_indices: NDArray[np.int32] | None = None,
+) -> tuple[NDArray[np.float64], str, Normalize, str | None]:
+    field = mesh.get_field(field_name)
+    try:
+        values = np.asarray(field.values, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Surface field {field_name!r} cannot be converted to numeric values"
+        ) from exc
+    finite = np.isfinite(values)
+    if face_indices is None:
+        displayed_values = values
+    elif field.location == "face":
+        displayed_values = values[face_indices]
+    else:
+        displayed_values = values[np.unique(mesh.faces[face_indices])]
+    displayed_finite = displayed_values[np.isfinite(displayed_values)]
+    if not len(displayed_finite):
+        raise ValueError(f"Surface field {field_name!r} has no finite values")
+    if field_range is None:
+        lower = float(np.min(displayed_finite))
+        upper = float(np.max(displayed_finite))
+    else:
+        if len(field_range) != 2:
+            raise ValueError("field_range must contain (minimum, maximum)")
+        lower, upper = (float(value) for value in field_range)
+    if not np.isfinite(lower) or not np.isfinite(upper) or lower > upper:
+        raise ValueError("field_range values must be finite and increasing")
+    if lower == upper:
+        padding = max(abs(lower) * 0.01, 1.0)
+        lower -= padding
+        upper += padding
+    if field_center is not None:
+        center = float(field_center)
+        if not np.isfinite(center) or not lower < center < upper:
+            raise ValueError("field_center must lie strictly inside field_range")
+        normalization = TwoSlopeNorm(vmin=lower, vcenter=center, vmax=upper)
+    else:
+        normalization = Normalize(vmin=lower, vmax=upper)
+    colors = np.asarray(colormaps.get_cmap(cmap)(normalization(values)), dtype=float)
+    colors[~finite] = to_rgba(invalid_color)
+    return colors, field.location, normalization, field.units
+
+
+def _surface_colorbar_html(
+    *,
+    field_name: str,
+    units: str | None,
+    cmap: str,
+    normalization: Normalize,
+) -> str:
+    """Build a compact legend overlay matching the mesh's scalar colors."""
+    palette = colormaps.get_cmap(cmap)
+    values = np.linspace(normalization.vmin, normalization.vmax, 33)
+    stops = ", ".join(
+        f"{to_hex(palette(normalization(value)))} {position:.1f}%"
+        for position, value in zip(np.linspace(0, 100, len(values)), values)
+    )
+    title = escape(field_name.replace("_", " "))
+    if units:
+        title += f" ({escape(units)})"
+    lower = f"{normalization.vmin:.3g}"
+    upper = f"{normalization.vmax:.3g}"
+    return (
+        '<div style="position:absolute;left:50%;bottom:12px;transform:translateX(-50%);'
+        'z-index:10;pointer-events:none;background:rgba(255,255,255,.88);'
+        'padding:6px 10px;border-radius:4px;color:#222;font:12px sans-serif;'
+        'width:min(320px,80%);box-sizing:border-box">'
+        f'<div style="text-align:center;margin-bottom:3px">{title}</div>'
+        f'<div style="height:12px;background:linear-gradient(to right,{stops});'
+        'border:1px solid #777"></div>'
+        '<div style="display:flex;justify-content:space-between;margin-top:2px">'
+        f"<span>{lower}</span><span>{upper}</span></div></div>"
+    )
+
+
+def _custom_surface_spec(
+    mesh: MolecularSurfaceMesh,
+    *,
+    colors: NDArray[np.float64] | None,
+    color_location: Literal["vertex", "face"] | None,
+    surface_color: Any,
+    opacity: float,
+    wireframe: bool,
+    face_indices: NDArray[np.int32] | None = None,
+) -> dict[str, Any]:
+    selected_faces = mesh.faces if face_indices is None else mesh.faces[face_indices]
+    if color_location == "face" or face_indices is not None:
+        vertices = mesh.vertices[selected_faces].reshape(-1, 3)
+        normals = mesh.normals[selected_faces].reshape(-1, 3)
+        faces = np.arange(len(vertices), dtype=np.int32)
+        if colors is None:
+            vertex_colors = None
+        elif color_location == "face":
+            selected_colors = colors if face_indices is None else colors[face_indices]
+            vertex_colors = np.repeat(selected_colors, 3, axis=0)
+        else:
+            vertex_colors = colors[selected_faces].reshape(-1, 4)
+    else:
+        vertices = mesh.vertices
+        normals = mesh.normals
+        faces = mesh.faces.reshape(-1)
+        vertex_colors = colors
+    spec: dict[str, Any] = {
+        "vertexArr": _vector_records(vertices),
+        "normalArr": _vector_records(normals),
+        "faceArr": faces.tolist(),
+        "opacity": float(opacity),
+        "wireframe": bool(wireframe),
+    }
+    if vertex_colors is None:
+        spec["color"] = surface_color
+    else:
+        spec["color"] = _rgb_records(vertex_colors)
+    return spec
+
+
+def plot_molecular_surface(
+    structure: Structure,
+    surface_obj: MolecularSurfaceResult | MolecularSurfaceMesh,
+    *,
+    component_id: int | None = None,
+    structure_style: StructureStyle | Mapping[str, Any] = "cartoon+stick",
+    field_name: str | None = None,
+    patch: SurfacePatch | None = None,
+    patches: SurfacePatchSet | None = None,
+    samples: SurfaceSamples | None = None,
+    surface_color: Any = "lightgray",
+    surface_opacity: float = 0.7,
+    cmap: str = "coolwarm",
+    colorbar: bool = False,
+    field_range: tuple[float, float] | None = None,
+    field_center: float | None = None,
+    invalid_color: Any = "gray",
+    patch_background_color: Any = "lightgray",
+    wireframe: bool = False,
+    normal_length: float = 1.0,
+    normal_color: Any = "black",
+    normal_radius: float = 0.04,
+    sample_radius: float = 0.0,
+    width: int = 900,
+    height: int = 600,
+    background_color: Any = "white",
+) -> Any:
+    """Combine a Biopython structure and an MSMS mesh in py3Dmol.
+
+    The structure can be drawn as cartoon, sticks, both, lines, a custom
+    py3Dmol style, or hidden. The surface can use one scalar field or a set of
+    face patch labels. ``patch`` restricts the mesh to one patch and can be
+    combined with ``field_name`` for continuous coloring. ``colorbar=True``
+    adds a legend to a scalar-field plot. Optional samples are shown as
+    normal-vector arrows.
+    """
+    import py3Dmol
+
+    mesh = _surface_mesh(surface_obj, component_id)
+    if field_name is not None and patches is not None:
+        raise ValueError("Specify either field_name or patches, not both")
+    if patch is not None and patches is not None:
+        raise ValueError("Specify either patch or patches, not both")
+    if colorbar and field_name is None:
+        raise ValueError("colorbar=True requires field_name")
+    face_indices = None
+    if patch is not None:
+        if patch.component_id != mesh.component_id:
+            raise ValueError("patch belongs to a different surface component")
+        face_indices = patch.face_indices
+        if (
+            not len(face_indices)
+            or np.any(face_indices < 0)
+            or np.any(face_indices >= len(mesh.faces))
+        ):
+            raise ValueError("patch face indices do not match the surface")
+    if not np.isfinite(surface_opacity) or not 0.0 <= surface_opacity <= 1.0:
+        raise ValueError("surface_opacity must be between 0 and 1")
+    if not np.isfinite(normal_length) or normal_length <= 0.0:
+        raise ValueError("normal_length must be finite and positive")
+    if not np.isfinite(normal_radius) or normal_radius <= 0.0:
+        raise ValueError("normal_radius must be finite and positive")
+    if not np.isfinite(sample_radius) or sample_radius < 0.0:
+        raise ValueError("sample_radius must be finite and non-negative")
+    if isinstance(width, bool) or not isinstance(width, int) or width < 1:
+        raise ValueError("width must be a positive integer")
+    if isinstance(height, bool) or not isinstance(height, int) or height < 1:
+        raise ValueError("height must be a positive integer")
+
+    colors = None
+    color_location = None
+    normalization = None
+    field_units = None
+    if patches is not None:
+        if patches.component_id != mesh.component_id:
+            raise ValueError("patches belong to a different surface component")
+        if len(patches.face_labels) != len(mesh.faces):
+            raise ValueError("patch labels do not match the surface face count")
+        colors = color_from_labels(
+            patches.face_labels,
+            cmap=cmap,
+            background_color=patch_background_color,
+        )
+        color_location = "face"
+    elif field_name is not None:
+        colors, color_location, normalization, field_units = _field_colors(
+            mesh,
+            field_name,
+            cmap=cmap,
+            field_range=field_range,
+            field_center=field_center,
+            invalid_color=invalid_color,
+            face_indices=face_indices,
+        )
+
+    view = py3Dmol.view(width=width, height=height)
+    view.setBackgroundColor(background_color)
+    view.addModel(_structure_pdb_text(structure), "pdb")
+    style_spec = _structure_style_spec(structure_style)
+    if style_spec is not None:
+        view.setStyle({"model": -1}, style_spec)
+    view.addCustom(
+        _custom_surface_spec(
+            mesh,
+            colors=colors,
+            color_location=color_location,
+            surface_color=surface_color,
+            opacity=surface_opacity,
+            wireframe=wireframe,
+            face_indices=face_indices,
+        )
+    )
+
+    if samples is not None:
+        if samples.component_id != mesh.component_id:
+            raise ValueError("samples belong to a different surface component")
+        for position, normal in zip(samples.positions, samples.normals):
+            end = position + normal_length * normal
+            if sample_radius > 0.0:
+                view.addSphere(
+                    {
+                        "center": _vector_records(position[np.newaxis, :])[0],
+                        "radius": float(sample_radius),
+                        "color": normal_color,
+                    }
+                )
+            view.addArrow(
+                {
+                    "start": _vector_records(position[np.newaxis, :])[0],
+                    "end": _vector_records(end[np.newaxis, :])[0],
+                    "radius": float(normal_radius),
+                    "color": normal_color,
+                }
+            )
+    view.zoomTo()
+    view.render()
+    if colorbar:
+        assert field_name is not None and normalization is not None
+        legend = _surface_colorbar_html(
+            field_name=field_name,
+            units=field_units,
+            cmap=cmap,
+            normalization=normalization,
+        )
+        closing_tag = view.startjs.find("</div>")
+        if closing_tag < 0:
+            raise RuntimeError("Could not attach colorbar to the py3Dmol view")
+        closing_tag += len("</div>")
+        wrapper = (
+            f'<div style="position:relative;width:{width}px;height:{height}px">'
+        )
+        view.startjs = (
+            wrapper
+            + view.startjs[:closing_tag]
+            + legend
+            + "</div>"
+            + view.startjs[closing_tag:]
+        )
     return view
 
 

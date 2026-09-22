@@ -8,6 +8,21 @@ release is published.
 
 ### Added
 
+- Added an integrated colorbar for scalar-field molecular-surface plots and a
+  `patch=` option to render one connected patch with continuous colormap colors.
+- Added an optional OpenMM adapter that assigns per-atom force-field charges,
+  adds missing hydrogens in memory, validates surface-to-structure atom
+  alignment, and forwards all charge sites to Coulomb surface mapping.
+- Reworked the molecular-surface notebook to download PDB entry 1CRN and
+  demonstrate hydrophobic patches and OpenMM-derived surface potential on a
+  real protein rather than a synthetic one-atom-per-residue model.
+- Added MSMS-backed triangulated solvent-excluded surfaces with stable atom
+  mappings, hydrophobic and Coulomb-potential vertex fields, connected surface
+  patches, deterministic label colors, area-uniform point/normal sampling, and
+  interactive py3Dmol structure/mesh/normal visualization.
+- Added an implementation TODO for optimized trajectory analysis of all eight
+  contact types, electrostatics with and without OpenMM, and direct
+  electrostatic/Lennard-Jones interaction-energy scores.
 - Added fixed-length NVT/NPT production runs with DCD or XTC trajectories,
   CSV thermodynamics reporting, periodic checkpoints, continuation support,
   and structured result metadata.

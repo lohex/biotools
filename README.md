@@ -28,9 +28,15 @@ Some workflows use separately installed command-line tools:
 
 - local sequence searches require NCBI BLAST+ (`makeblastdb` and `blastp`);
 - secondary-structure assignment requires DSSP (`dssp` or `mkdssp`); and
-- solvent-accessibility analysis requires FreeSASA (`freesasa`).
+- solvent-accessibility analysis requires FreeSASA (`freesasa`); and
+- triangulated molecular surfaces require MSMS (`msms`).
 
 See the module guides for workflow-specific requirements and examples.
+
+The [`molecular_surface.ipynb`](examples/molecular_surface.ipynb) notebook
+downloads PDB entry 1CRN and demonstrates MSMS mesh generation, hydrophobic
+surface patches, optional OpenMM-derived electrostatic potential, and
+interactive visualization. It requires network access on its first run.
 
 ## Installation
 
@@ -46,7 +52,7 @@ The base installation omits the molecular-dynamics dependencies and their
 large CUDA packages. Geometric contact characterization uses built-in protein
 bond templates by default.
 
-Install the CPU-only OpenMM contact-topology backend with:
+Install the CPU-only OpenMM contact-topology and surface-charge backends with:
 
 ```bash
 python -m pip install -e ".[contacts]"

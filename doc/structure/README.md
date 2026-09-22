@@ -15,6 +15,7 @@
   - [DSSP](#dssp)
   - [FreeSASA](#freesasa)
   - [Interaction-surface analysis](#interaction-surface-analysis)
+  - [Molecular surface meshes](#molecular-surface-meshes)
 - [Distances and contacts](#distances-and-contacts)
   - [Residue contacts by distance](#residue-contacts-by-distance)
   - [Geometric contact characterization](#geometric-contact-characterization)
@@ -39,7 +40,8 @@ The following external programs are only needed for their corresponding
 analyses and must be available on `PATH`:
 
 - DSSP as `dssp` or `mkdssp` for secondary-structure assignment;
-- `freesasa` for SASA and interaction-surface calculations.
+- `freesasa` for SASA and interaction-surface calculations; and
+- `msms` for triangulated solvent-excluded surfaces.
 
 Contact characterization uses built-in protein bond templates without an
 optional dependency. In Python packaging, an *extra* is a named group of
@@ -250,6 +252,127 @@ hetero residues before calculating the isolated chains and their complex. It
 does not modify the input structure. Set `per_residue_scores=False` to omit
 residue records, or disable relative or absolute output independently.
 
+### Molecular surface meshes
+
+`calculate_molecular_surface()` calls MSMS and returns zero-based NumPy mesh
+arrays, vertex normals, and a stable mapping from every vertex to the closest
+input atom. MSMS must be available on `PATH`, or its path can be passed with
+`executable=`:
+
+```python
+from biotools.structure import calculate_molecular_surface
+
+surface = calculate_molecular_surface(
+    structure,
+    probe_radius=1.5,
+    density=1.0,
+    executable="msms",
+)
+
+mesh = surface.surface
+print(mesh.vertices.shape, mesh.faces.shape, mesh.normals.shape)
+```
+
+By default the first structure model is used, hydrogens and water are omitted,
+and other hetero atoms are retained. Atomic radii come from Biopython's atomic
+radii table. Supply missing or replacement element radii with, for example,
+`radii={"FE": 1.8}`. Use `all_components=True` to retain internal components
+and cavities in addition to the primary external component.
+
+Hydrophobicity can be assigned from the Kyte-Doolittle residue scale. Values
+for unsupported residues are `NaN` unless `unknown_value` is supplied:
+
+```python
+from biotools.structure import map_hydrophobicity
+
+surface = map_hydrophobicity(surface)
+hydrophobicity = surface.surface.get_field("hydrophobicity").values
+```
+
+Electrostatic mapping requires one partial charge per `surface.atoms` entry.
+The built-in calculation is an unscreened direct Coulomb potential, not a
+Poisson-Boltzmann calculation. `dielectric` must therefore be selected for the
+intended model:
+
+```python
+from biotools.structure import map_electrostatic_potential
+
+surface = map_electrostatic_potential(
+    surface,
+    charges,
+    dielectric=4.0,
+)
+```
+
+For a complete protein PDB, use OpenMM to assign **per-atom force-field
+partial charges** instead of assigning an entire residue charge to every
+atom. Install `biotools[contacts]` for OpenMM, then pass the same Biopython
+structure used to generate the surface:
+
+```python
+from biotools.structure import (
+    calculate_molecular_surface,
+    load_pdb_from_file,
+    map_electrostatic_potential_openmm,
+)
+
+structure = load_pdb_from_file("prepared_protein.pdb")
+surface = calculate_molecular_surface(
+    structure,
+    include_heteroatoms=False,
+)
+surface = map_electrostatic_potential_openmm(
+    structure,
+    surface,
+    forcefield_files=("amber14-all.xml",),
+    add_hydrogens=True,
+    ph=7.0,
+    dielectric=4.0,
+)
+```
+
+The OpenMM adapter adds missing hydrogens to an in-memory copy and includes
+their charges and positions in the Coulomb sum even when the MSMS surface
+contains only heavy atoms. It does **not** repair missing heavy atoms or
+parameterize unsupported ligands automatically: prepare those separately or
+provide compatible force-field files. A regular PDB alone does not determine
+protonation and partial charges uniquely. The resulting field is still a
+constant-dielectric Coulomb approximation, not a solvent-screened potential.
+
+Thresholded fields can be segmented into connected face patches. Patch labels
+are `-1` for background and otherwise index `patches.patches`:
+
+```python
+from biotools.structure import color_from_labels, find_surface_patches
+
+patches = find_surface_patches(
+    surface,
+    field_name="hydrophobicity",
+    threshold=1.5,
+    min_area=10.0,
+)
+face_colors = color_from_labels(patches.face_labels)
+```
+
+`sample_surface()` chooses triangles proportional to their area and samples
+uniform barycentric coordinates within them. Vertex fields and normals are
+interpolated at the sampled positions:
+
+```python
+from biotools.structure import sample_surface
+
+samples = sample_surface(
+    surface,
+    500,
+    patch=patches.patches[0],
+    field_names=("hydrophobicity", "electrostatic_potential"),
+    seed=42,
+)
+
+probe_positions = samples.positions + 2.0 * samples.normals
+potential = samples.get_field("electrostatic_potential").values
+```
+
 ## Distances and contacts
 
 ### Residue contacts by distance
@@ -412,10 +535,15 @@ plotting functions to use the optional OpenMM topology backend.
 
 ## Visualization and orientation
 
-`plot_structure()` creates an interactive py3Dmol view. `move_to_center()`
-returns a translated copy whose center of mass is at the origin, while
-`superimpose_PCA()` can center and orient a copy along the principal axes of
-its Cα coordinates.
+`plot_structure()` creates an interactive py3Dmol view. The related
+`plot_molecular_surface()` combines cartoon, stick, line, or custom structure
+styles with an MSMS mesh. The mesh can be colored by one scalar field or by a
+`SurfacePatchSet`; optional `SurfaceSamples` are drawn as normal-vector arrows.
+With `colorbar=True`, a continuous field's color scale appears inside the
+interactive view.
+`move_to_center()` returns a translated copy whose center of mass is at the
+origin, while `superimpose_PCA()` can center and orient a copy along the
+principal axes of its Cα coordinates.
 
 ```python
 from biotools.structure import move_to_center, plot_structure, superimpose_PCA
@@ -425,6 +553,42 @@ oriented, shift, rotation = superimpose_PCA(centered)
 view = plot_structure(oriented)
 view.show()
 ```
+
+```python
+from biotools.structure import plot_molecular_surface
+
+view = plot_molecular_surface(
+    structure,
+    surface,
+    structure_style="cartoon+stick",
+    patches=patches,
+    samples=samples,
+    surface_opacity=0.65,
+)
+view.show()
+```
+
+Pass `field_name="electrostatic_potential"` instead of `patches=` to use a
+continuous surface field. `field_range=` and `field_center=` control its color
+normalization. Patch colors are applied per face; continuous vertex fields are
+interpolated by the WebGL renderer.
+
+To display only the largest patch with continuous colors, pass the individual
+`SurfacePatch` as `patch=` together with a `field_name`. The colorbar then uses
+the displayed patch's value range unless `field_range` is set explicitly.
+
+```python
+largest = max(patches.patches, key=lambda patch: patch.area)
+view = plot_molecular_surface(
+    structure, surface, patch=largest,
+    field_name="hydrophobicity", cmap="coolwarm", colorbar=True,
+    structure_style={"cartoon": {"color": "blue"}},
+)
+view.show()
+```
+
+`colorbar=True` requires `field_name`; categorical `patches=` coloring does not
+have a continuous color scale.
 
 ## Compatibility imports
 
