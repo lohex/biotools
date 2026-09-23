@@ -40,8 +40,10 @@ The following external programs are only needed for their corresponding
 analyses and must be available on `PATH`:
 
 - DSSP as `dssp` or `mkdssp` for secondary-structure assignment;
-- `freesasa` for SASA and interaction-surface calculations; and
-- `msms` for triangulated solvent-excluded surfaces.
+- `freesasa` for SASA and interaction-surface calculations;
+- `msms` for triangulated solvent-excluded surfaces; and
+- `apbs` for solvent-screened Poisson--Boltzmann potentials. PDB2PQR is a
+  Python dependency of the base package and prepares the corresponding PQR.
 
 Contact characterization uses built-in protein bond templates without an
 optional dependency. In Python packaging, an *extra* is a named group of
@@ -339,6 +341,35 @@ provide compatible force-field files. A regular PDB alone does not determine
 protonation and partial charges uniquely. The resulting field is still a
 constant-dielectric Coulomb approximation, not a solvent-screened potential.
 
+For an ion- and solvent-screened potential, use the PDB2PQR/APBS backend.
+PDB2PQR assigns protonation states, atomic charges, and PB radii; APBS solves
+the linearized or nonlinear Poisson--Boltzmann equation on a finite-difference
+grid. The OpenDX potential is interpolated onto the MSMS vertices and converted
+from `kT/e` to `kJ mol^-1 e^-1`:
+
+```python
+from biotools.structure import map_electrostatic_potential_apbs
+
+pb_surface = map_electrostatic_potential_apbs(
+    structure,
+    surface,
+    ph=7.4,
+    equation="linearized",
+    protein_dielectric=2.0,
+    solvent_dielectric=78.54,
+    ionic_strength=0.15,  # mol/litre, symmetric monovalent salt
+    grid_spacing=0.5,     # target maximum spacing in angstroms
+)
+```
+
+`apbs` must be on `PATH`, or set `apbs_executable=`. By default PDB2PQR runs
+through the active Python interpreter; `pdb2pqr_executable=` can select a
+different command. `grid_padding`, `grid_spacing`, and `max_grid_points`
+control grid extent, resolution, and the memory guard. Nonstandard residues
+usually need ligand or user-force-field arguments via `pdb2pqr_options`.
+APBS constructs its dielectric boundary from PDB2PQR radii; the returned field
+is sampled on the independently calculated MSMS visualization mesh.
+
 Thresholded fields can be segmented into connected face patches. Patch labels
 are `-1` for background and otherwise index `patches.patches`:
 
@@ -562,6 +593,7 @@ view = plot_molecular_surface(
     surface,
     structure_style="cartoon+stick",
     patches=patches,
+    patch_wireframe=True,
     samples=samples,
     surface_opacity=0.65,
 )
@@ -571,7 +603,11 @@ view.show()
 Pass `field_name="electrostatic_potential"` instead of `patches=` to use a
 continuous surface field. `field_range=` and `field_center=` control its color
 normalization. Patch colors are applied per face; continuous vertex fields are
-interpolated by the WebGL renderer.
+interpolated by the WebGL renderer. With `patch_wireframe=True`, the MSMS
+triangle edges are overlaid only on the faces selected by `patch=` or
+`patches=`; `patch_wireframe_color=` controls their color. The grid follows
+the original mesh resolution, so a lower MSMS `density` can make it easier to
+read.
 
 To display only the largest patch with continuous colors, pass the individual
 `SurfacePatch` as `patch=` together with a `field_name`. The colorbar then uses
@@ -589,6 +625,48 @@ view.show()
 
 `colorbar=True` requires `field_name`; categorical `patches=` coloring does not
 have a continuous color scale.
+
+## Interactive contact views
+
+`plot_structure_contacts()` visualizes existing typed `ContactObservation` or
+`ContactAnalysisResult` objects; it does not detect contacts. The returned
+`StructureContactView` displays in a notebook and writes an interactive HTML
+file. The HTML loads 3Dmol.js from a CDN, so opening it requires network access.
+
+```python
+from biotools.structure import plot_structure_contacts
+
+contact_view = plot_structure_contacts(
+    structure,
+    contact_result,
+    chain_styles={
+        "A": {"cartoon": {"color": "#d0d0d0", "opacity": 0.55}},
+        "B": {"cartoon": {"color": "#d97721", "opacity": 0.90}},
+    },
+    chain_labels={"A": "Receptor", "B": "Ligand"},
+    contact_types={"hydrogen_bond", "salt_bridge", "water_bridge"},
+    enabled_contact_types={"hydrogen_bond", "salt_bridge"},
+    residue_labels={"A": "active", "B": "all"},
+    initial_view="xy",
+)
+contact_view.write_html("contacts.html")
+```
+
+`contact_types` excludes contact types from the document.
+`enabled_contact_types` keeps included types available but initially hidden.
+The sidebar has master, type, and individual-pair checkboxes. Its pair buttons
+show a floating interaction label; selecting a pair does not change the line
+radius. `show_contact_types()` and `show_contact_pairs()` change which
+contacts are serialized the next time the view is displayed or saved.
+`set_contact_type_enabled()`, `set_contact_pair_enabled()`,
+`set_all_contacts_enabled()`, `highlight_contact_pair()`,
+`set_residue_label_mode()`, and `set_view()` change state from Python.
+The exported HTML offers the same visibility and view controls in the browser.
+
+Contact styles can be overridden through `contact_styles=`; ring planes use
+`ring_opacity=`. A 4×4 rigid `coordinate_transform` or a callable that
+returns an aligned copy can orient the structure before rendering. Named view
+presets accept a four-number rotation quaternion or an eight-number 3Dmol view.
 
 ## Compatibility imports
 

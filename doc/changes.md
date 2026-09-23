@@ -8,6 +8,14 @@ release is published.
 
 ### Added
 
+- Added `plot_structure_contacts()` with typed contact geometry, grouped
+  dashed connections, aromatic planes, water bridges, synchronized pair/type
+  controls, residue labels, view presets, and standalone interactive HTML.
+- Added a `patch_wireframe=True` overlay that draws the MSMS triangle grid
+  only on selected surface patches; the molecular-surface notebook now uses a
+  coarser mesh and distinct patch colors for a clearer three-patch view.
+- Added a PDB2PQR/APBS backend for linearized or nonlinear, solvent- and
+  ion-screened Poisson--Boltzmann potentials interpolated onto surface meshes.
 - Added an integrated colorbar for scalar-field molecular-surface plots and a
   `patch=` option to render one connected patch with continuous colormap colors.
 - Added an optional OpenMM adapter that assigns per-atom force-field charges,

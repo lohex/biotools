@@ -52,6 +52,13 @@ from .visualization import (
     plot_structure,
     StructureStyle,
 )
+from .contact_visualization import (
+    ContactStyle,
+    DEFAULT_CONTACT_STYLES,
+    DisplayedContact,
+    plot_structure_contacts,
+    StructureContactView,
+)
 from .metadata import PDBMetadata, RCSBMetadataError, get_pdb_metadata
 from .secondary_structure import (
     AccessibilityScale,
@@ -87,6 +94,7 @@ from .molecular_surface import (
     SurfaceSamples,
 )
 from .electrostatic_potential import map_electrostatic_potential_openmm
+from .poisson_boltzmann import map_electrostatic_potential_apbs
 from .contacts import (
     aggregate_contact_features,
     analyze_contacts,
@@ -137,11 +145,14 @@ __all__ = [
     "ContactFeatureSet",
     "ContactObservation",
     "ContactSystem",
+    "ContactStyle",
     "CriterionResult",
+    "DEFAULT_CONTACT_STYLES",
     "DSSPResidue",
     "DSSPResult",
     "DistanceMetric",
     "DistanceMatrix",
+    "DisplayedContact",
     "extract_chain",
     "evaluate_water_bridges",
     "GeometryMeasurement",
@@ -165,6 +176,7 @@ __all__ = [
     "InteractionSurfaceScore",
     "InteractionMeasure",
     "map_electrostatic_potential",
+    "map_electrostatic_potential_apbs",
     "map_electrostatic_potential_openmm",
     "map_hydrophobicity",
     "map_three_to_one",
@@ -182,6 +194,7 @@ __all__ = [
     "plot_interchain_interaction_matrix",
     "plot_molecular_surface",
     "plot_structure",
+    "plot_structure_contacts",
     "prepare_contact_system",
     "propose_bridging_waters",
     "remove_wather_molecules",
@@ -201,6 +214,7 @@ __all__ = [
     "SurfacePatchSet",
     "SurfaceSamples",
     "StructureStyle",
+    "StructureContactView",
     "superimpose_PCA",
     "get_pdb_metadata",
     "WaterAnalysisResult",

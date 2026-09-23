@@ -280,6 +280,7 @@ def _custom_surface_spec(
     opacity: float,
     wireframe: bool,
     face_indices: NDArray[np.int32] | None = None,
+    normal_offset: float = 0.0,
 ) -> dict[str, Any]:
     selected_faces = mesh.faces if face_indices is None else mesh.faces[face_indices]
     if color_location == "face" or face_indices is not None:
@@ -298,6 +299,8 @@ def _custom_surface_spec(
         normals = mesh.normals
         faces = mesh.faces.reshape(-1)
         vertex_colors = colors
+    if normal_offset:
+        vertices = vertices + normal_offset * normals
     spec: dict[str, Any] = {
         "vertexArr": _vector_records(vertices),
         "normalArr": _vector_records(normals),
@@ -331,6 +334,8 @@ def plot_molecular_surface(
     invalid_color: Any = "gray",
     patch_background_color: Any = "lightgray",
     wireframe: bool = False,
+    patch_wireframe: bool = False,
+    patch_wireframe_color: Any = "#303030",
     normal_length: float = 1.0,
     normal_color: Any = "black",
     normal_radius: float = 0.04,
@@ -344,9 +349,10 @@ def plot_molecular_surface(
     The structure can be drawn as cartoon, sticks, both, lines, a custom
     py3Dmol style, or hidden. The surface can use one scalar field or a set of
     face patch labels. ``patch`` restricts the mesh to one patch and can be
-    combined with ``field_name`` for continuous coloring. ``colorbar=True``
-    adds a legend to a scalar-field plot. Optional samples are shown as
-    normal-vector arrows.
+    combined with ``field_name`` for continuous coloring. ``patch_wireframe``
+    overlays triangle edges only on the selected patch or patch set.
+    ``colorbar=True`` adds a legend to a scalar-field plot. Optional
+    samples are shown as normal-vector arrows.
     """
     import py3Dmol
 
@@ -355,6 +361,8 @@ def plot_molecular_surface(
         raise ValueError("Specify either field_name or patches, not both")
     if patch is not None and patches is not None:
         raise ValueError("Specify either patch or patches, not both")
+    if patch_wireframe and patch is None and patches is None:
+        raise ValueError("patch_wireframe requires patch or patches")
     if colorbar and field_name is None:
         raise ValueError("colorbar=True requires field_name")
     face_indices = None
@@ -424,6 +432,25 @@ def plot_molecular_surface(
             face_indices=face_indices,
         )
     )
+    if patch_wireframe:
+        wireframe_faces = (
+            face_indices
+            if patch is not None
+            else np.flatnonzero(patches.face_labels >= 0).astype(np.int32)
+        )
+        if len(wireframe_faces):
+            view.addCustom(
+                _custom_surface_spec(
+                    mesh,
+                    colors=None,
+                    color_location=None,
+                    surface_color=patch_wireframe_color,
+                    opacity=1.0,
+                    wireframe=True,
+                    face_indices=wireframe_faces,
+                    normal_offset=0.02,
+                )
+            )
 
     if samples is not None:
         if samples.component_id != mesh.component_id:

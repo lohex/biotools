@@ -1,5 +1,7 @@
 """Tests for triangulated molecular surfaces and derived analyses."""
 
+from dataclasses import replace
+import importlib.util
 import json
 from pathlib import Path
 import shutil
@@ -16,6 +18,7 @@ from biotools.structure import (
     color_from_labels,
     find_surface_patches,
     map_electrostatic_potential,
+    map_electrostatic_potential_apbs,
     map_electrostatic_potential_openmm,
     map_hydrophobicity,
     MolecularSurfaceMesh,
@@ -336,6 +339,92 @@ def test_openmm_potential_reports_incomplete_residue() -> None:
         map_electrostatic_potential_openmm(structure, surface)
 
 
+def test_apbs_potential_runs_pdb2pqr_and_interpolates_grid() -> None:
+    observed = {}
+    structure = _structure()
+    structure.id = "synthetic"
+    structure[0]["A"][1]["CA"].coord = np.asarray([0.0, 0.0, -1.0])
+    structure[0]["A"][2]["CB"].coord = np.asarray([4.0, 0.0, -1.0])
+
+    def run(command, **kwargs):
+        if command[0] == "test-pdb2pqr":
+            observed["pdb2pqr"] = command
+            Path(command[-1]).write_text(
+                "ATOM 1 CA ALA A 1 0.000 0.000 -1.000 0.000 1.700\n"
+                "ATOM 2 CB VAL A 2 4.000 0.000 -1.000 0.000 1.700\n"
+            )
+        else:
+            observed["apbs"] = command
+            directory = Path(kwargs["cwd"])
+            observed["input"] = (directory / command[1]).read_text()
+            coordinates = np.arange(-10.0, 11.0, 10.0)
+            values = [
+                x + y + z for x in coordinates for y in coordinates for z in coordinates
+            ]
+            (directory / "potential-PE0.dx").write_text(
+                "object 1 class gridpositions counts 3 3 3\n"
+                "origin -10 -10 -10\n"
+                "delta 10 0 0\n"
+                "delta 0 10 0\n"
+                "delta 0 0 10\n"
+                "object 2 class gridconnections counts 3 3 3\n"
+                "object 3 class array type double rank 0 items 27 data follows\n"
+                + " ".join(map(str, values))
+                + "\nattribute \"dep\" string \"positions\"\n"
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    with patch(
+        "biotools.structure.poisson_boltzmann.subprocess.run", side_effect=run
+    ):
+        result = map_electrostatic_potential_apbs(
+            structure,
+            _surface_result(),
+            pdb2pqr_executable="test-pdb2pqr",
+            apbs_executable="test-apbs",
+            ionic_strength=0.15,
+            grid_spacing=2.0,
+        )
+
+    assert observed["pdb2pqr"][0] == "test-pdb2pqr"
+    assert "--titration-state-method" in observed["pdb2pqr"]
+    assert observed["apbs"] == ["test-apbs", "apbs.in"]
+    assert "lpbe" in observed["input"]
+    assert "ion charge 1 conc 0.15 radius 2" in observed["input"]
+    potential = result.surface.get_field("electrostatic_potential")
+    conversion = 0.00831446261815324 * 298.15
+    np.testing.assert_allclose(
+        potential.values,
+        np.sum(result.surface.vertices, axis=1) * conversion,
+    )
+    assert potential.units == "kJ mol^-1 e^-1"
+    assert "ionic_strength=0.15 M" in potential.source
+
+
+@pytest.mark.skipif(
+    shutil.which("apbs") is None
+    or shutil.which("msms") is None
+    or importlib.util.find_spec("pdb2pqr") is None,
+    reason="APBS, PDB2PQR, or MSMS is not available",
+)
+def test_apbs_potential_with_installed_backends() -> None:
+    structure = _complete_dipeptide()
+    surface = calculate_molecular_surface(structure)
+
+    result = map_electrostatic_potential_apbs(
+        structure,
+        surface,
+        grid_spacing=1.5,
+        grid_padding=5.0,
+        max_grid_points=65,
+    )
+
+    field = result.surface.get_field("electrostatic_potential")
+    assert len(field.values) == len(surface.surface.vertices)
+    assert np.all(np.isfinite(field.values))
+    assert np.ptp(field.values) > 0.0
+
+
 def test_find_surface_patches_labels_connected_thresholded_faces() -> None:
     result = _surface_result()
     field = SurfaceField(
@@ -476,6 +565,42 @@ def test_plot_molecular_surface_colors_only_selected_patch() -> None:
     assert len(spec["color"]) == 3
     assert "linear-gradient(to right" in view.startjs
 
+
+
+def test_plot_molecular_surface_wireframe_covers_only_patch_faces() -> None:
+    mesh = replace(
+        _surface_result().surface,
+        fields=(SurfaceField(
+            name="score", location="face", values=np.asarray([1.0, -1.0])
+        ),),
+    )
+    patches = find_surface_patches(
+        mesh, field_name="score", threshold=0.5
+    )
+
+    view = plot_molecular_surface(
+        _structure(), mesh, patches=patches,
+        patch_wireframe=True, patch_wireframe_color="#222222",
+    )
+
+    specs = [
+        json.loads(call.split(");", 1)[0])
+        for call in view.startjs.split(".addCustom(")[1:]
+    ]
+    assert len(specs) == 2
+    assert specs[0]["wireframe"] is False
+    assert len(specs[0]["faceArr"]) == 6
+    assert specs[1]["wireframe"] is True
+    assert specs[1]["faceArr"] == [0, 1, 2]
+    assert specs[1]["color"] == "#222222"
+    assert specs[1]["vertexArr"][0]["z"] == pytest.approx(0.02)
+
+
+def test_plot_molecular_surface_wireframe_requires_patch_selection() -> None:
+    with pytest.raises(ValueError, match="requires patch or patches"):
+        plot_molecular_surface(
+            _structure(), _surface_result(), patch_wireframe=True
+        )
 
 def test_plot_molecular_surface_rejects_colorbar_without_field() -> None:
     with pytest.raises(ValueError, match="requires field_name"):

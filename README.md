@@ -28,15 +28,16 @@ Some workflows use separately installed command-line tools:
 
 - local sequence searches require NCBI BLAST+ (`makeblastdb` and `blastp`);
 - secondary-structure assignment requires DSSP (`dssp` or `mkdssp`); and
-- solvent-accessibility analysis requires FreeSASA (`freesasa`); and
-- triangulated molecular surfaces require MSMS (`msms`).
+- solvent-accessibility analysis requires FreeSASA (`freesasa`);
+- triangulated molecular surfaces require MSMS (`msms`); and
+- solvent-screened Poisson--Boltzmann potentials require APBS (`apbs`).
 
 See the module guides for workflow-specific requirements and examples.
 
 The [`molecular_surface.ipynb`](examples/molecular_surface.ipynb) notebook
 downloads PDB entry 1CRN and demonstrates MSMS mesh generation, hydrophobic
-surface patches, optional OpenMM-derived electrostatic potential, and
-interactive visualization. It requires network access on its first run.
+surface patches, optional electrostatic-potential mapping, and interactive
+visualization. It requires network access on its first run.
 
 ## Installation
 
