@@ -654,6 +654,8 @@ contact_view.write_html("contacts.html")
 
 `contact_types` excludes contact types from the document.
 `enabled_contact_types` keeps included types available but initially hidden.
+The Hide controls button at the top collapses the sidebar to a Show controls
+button, preserving contact visibility, highlights, and expanded lists.
 The sidebar puts Views first, followed by Residue labels and Interaction types.
 Each type has a Show contacts button that expands a separated list of residue
 pairs, formatted as chain, residue name, position, and distance.

@@ -320,6 +320,17 @@ def test_browser_controls_labels_rotation_and_filled_ring_planes() -> None:
         selected = page.evaluate(state)
         assert selected["highlightLabelCount"] == 1
         assert selected["shapeCount"] == one["shapeCount"]
+        toggle = page.locator("[data-controls-toggle]")
+        toggle.click()
+        assert page.locator("[data-controls-body]").is_hidden()
+        assert toggle.is_visible()
+        assert toggle.get_attribute("aria-expanded") == "false"
+        assert page.evaluate(state) == selected
+        toggle.press("Enter")
+        assert page.locator("[data-controls-body]").is_visible()
+        assert toggle.get_attribute("aria-expanded") == "true"
+        assert page.evaluate(state) == selected
+        assert hbond.locator("[data-pair-select]").is_visible()
         assert page.evaluate("""() => {
           const v=window[Object.keys(window).find(k=>/^viewer_[0-9]+$/.test(k))];
           return v.shapes[0] === window.__shapeBefore;

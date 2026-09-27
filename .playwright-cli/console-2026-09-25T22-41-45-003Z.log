@@ -1,0 +1,5 @@
+[    3265ms] [WARNING] [.WebGL-0x1ccc000a3000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels @ http://127.0.0.1:19875/biotools-1brs-overview.html:0
+[    3265ms] [WARNING] [.WebGL-0x1ccc000a3000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels @ http://127.0.0.1:19875/biotools-1brs-overview.html:0
+[    3265ms] [WARNING] [.WebGL-0x1ccc000a3000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels @ http://127.0.0.1:19875/biotools-1brs-overview.html:0
+[    3266ms] [WARNING] [.WebGL-0x1ccc000a3000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat) @ http://127.0.0.1:19875/biotools-1brs-overview.html:0
+[    3384ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:19875/favicon.ico:0

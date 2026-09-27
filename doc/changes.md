@@ -8,7 +8,10 @@ release is published.
 
 ### Added
 
-
+- Added a top-level Hide/Show controls button to collapse the contact-view
+  controller while preserving contact visibility, highlights, and open lists.
+- Extended browser regression coverage for collapsing and reopening contact
+  controls using mouse and keyboard, preserving viewer state and expanded lists.
 - Added an executable 1BRS interactions notebook covering typed contact
   analysis, aggregation, distance and interaction matrices, interactive 3D
   contact filtering, and standalone HTML export.
@@ -52,6 +55,24 @@ release is published.
 
 ### Changed
 
+- Increased the package version from `0.1.1` to `0.3.1`, counting the commit
+  and push as separate subversion increments under the repository policy.
+- Included the existing Playwright console log and UI snapshot from the
+  contact-view inspection.
+- Replaced the planned ProLIF integration in the peptide–MHC workflow with
+  biotools contact detectors and the planned native trajectory/occupancy API;
+  limited ProLIF references to optional external benchmarking and literature.
+- Translated the trajectory-analysis and peptide–MHC planning documents in
+  `TODOS/` into English, preserving their examples, equations, and requirements.
+- Updated the contact/water implementation plan status to distinguish existing
+  functionality from outstanding acceptance criteria and scientific validation.
+- Added a package-versioning rule in `AGENTS.md`: increment the subversion for
+  every commit and every push; when the user explicitly announces a new version,
+  increment the major version and reset the subversion to zero instead.
+- Documented the collapsible contact sidebar in the structure guide and
+  refreshed the standalone 1BRS HTML example and interactions notebook outputs.
+- Clarified in `AGENTS.md` that every new feature and bug fix must be documented
+  under `Unreleased` in `doc/changes.md` before committing or pushing.
 - Made the interactions notebook use the existing default stick display for
   amino acids participating in visible contacts without an explicit option.
 

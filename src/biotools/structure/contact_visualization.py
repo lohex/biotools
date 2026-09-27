@@ -586,11 +586,15 @@ class StructureContactView:
         ident = escape(self._id, quote=True)
         sidebar = (
             f'<aside class="biotools-contact-controls" aria-label="Interaction controls">'
+            '<div class="bc-toolbar"><button type="button" data-controls-toggle '
+            f'aria-expanded="true" aria-controls="{ident}-controls-body">'
+            'Hide controls ▴</button></div>'
+            f'<div data-controls-body id="{ident}-controls-body">'
             '<div class="bc-head">Views</div><div data-views></div>'
             '<div class="bc-head">Residue labels</div><div data-chains></div>'
             '<section class="bc-interaction-section">'
             '<div class="bc-head"><label><input type="checkbox" data-master> Interaction types</label></div>'
-            '<div data-types></div></section></aside>'
+            '<div data-types></div></section></div></aside>'
             if self._show_controls else ""
         )
         return (
@@ -736,6 +740,9 @@ _CONTACT_CSS = """
   width:340px;max-width:calc(100% - 20px);max-height:calc(100% - 20px);
   overflow:auto;box-sizing:border-box;background:rgba(255,255,255,.96);
   border:1px solid #cbd1d6;border-radius:8px;padding:12px;box-shadow:0 2px 12px #0002}
+.biotools-contact-controls .bc-toolbar{display:flex;justify-content:flex-end;margin-bottom:12px}
+.biotools-contact-controls.bc-collapsed{width:auto;padding:8px}
+.biotools-contact-controls.bc-collapsed .bc-toolbar{margin-bottom:0}
 .biotools-contact-controls .bc-head{font-weight:650;margin:3px 0 7px}
 .biotools-contact-controls [data-views]{display:flex;gap:5px;margin-bottom:16px}
 .biotools-contact-controls .bc-interaction-section{margin-top:18px;padding-top:14px;
@@ -1061,7 +1068,13 @@ function createBiotoolsContactController(root, viewer, initial) {
     controls.addEventListener('click',event => {
       const target = event.target.closest('button');
       if(!target) return;
-      if(target.dataset.expand) {
+      if(target.matches('[data-controls-toggle]')) {
+        const body = controls.querySelector('[data-controls-body]');
+        body.hidden = !body.hidden;
+        controls.classList.toggle('bc-collapsed',body.hidden);
+        target.setAttribute('aria-expanded',String(!body.hidden));
+        target.textContent = body.hidden ? 'Show controls ▾' : 'Hide controls ▴';
+      } else if(target.dataset.expand) {
         const group = target.closest('[data-contact-type]');
         const list = group.querySelector('[data-pairs]');
         list.hidden = !list.hidden;
