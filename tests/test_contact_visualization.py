@@ -158,6 +158,46 @@ def test_master_type_pair_state_and_highlight_are_synchronized() -> None:
     assert view.highlighted_pair_id is None
 
 
+
+def test_multiple_highlights_keep_independent_visibility_and_filtering() -> None:
+    structure, observations = _fixture()
+    view = plot_structure_contacts(structure, observations)
+    first, second, third = view.contacts
+    view.highlight_contact_pair(first.pair_id)
+    view.highlight_contact_pair(second.pair_id)
+    assert view.highlighted_pair_ids == {first.pair_id, second.pair_id}
+    assert set(view._payload()["highlighted"]) == view.highlighted_pair_ids
+    assert view.highlighted_pair_id == second.pair_id
+    view.set_contact_pair_highlighted(first.pair_id, False)
+    assert first.pair_id in view.enabled_pair_ids
+    assert view.highlighted_pair_ids == {second.pair_id}
+    view.highlight_contact_pair(third.pair_id)
+    view.show_contact_pairs({first.pair_id, third.pair_id})
+    assert view.highlighted_pair_ids == {third.pair_id}
+    view.set_contact_pair_enabled(third.pair_id, False)
+    assert not view.highlighted_pair_ids
+    view.highlight_contact_pair(first.pair_id)
+    view.clear_highlight()
+    assert not view.highlighted_pair_ids
+    assert first.pair_id in view.enabled_pair_ids
+    strict = plot_structure_contacts(
+        structure, observations, enabled_contact_types=(), enable_on_select=False,
+    )
+    with pytest.raises(ValueError, match="disabled"):
+        strict.highlight_contact_pair(strict.contacts[0].pair_id)
+
+
+def test_contact_rows_identify_residues_and_controls_are_ordered() -> None:
+    structure, observations = _fixture()
+    view = plot_structure_contacts(structure, observations)
+    contact = next(c for c in view._payload()["contacts"] if c["type"] == "hydrogen_bond")
+    assert contact["pairLabel"] == "A SER 1 – B ASP 2 · 3.00 Å"
+    html = view.to_html()
+    assert html.index('data-views>') < html.index('data-chains>') < html.index('data-types>')
+    assert view._payload()["activeSticks"] is True
+    assert len(view._payload()["stickResidues"]) == 4
+
+
 def test_residue_labels_ring_planes_and_water_geometry() -> None:
     structure, observations = _fixture()
     view = plot_structure_contacts(
@@ -258,13 +298,20 @@ def test_browser_controls_labels_rotation_and_filled_ring_planes() -> None:
         assert disabled["shapeCount"] == 0
         assert disabled["residueLabelCount"] == 0
 
-        hbond = page.locator("details").filter(has_text="Hydrogen bond")
-        hbond.locator("summary").click()
+        hbond = page.locator("[data-contact-type=hydrogen_bond]")
+        hbond.locator("[data-expand]").click()
         hbond.locator("[data-pair-check]").check()
         one = page.evaluate(state)
         assert len(one["enabled"]) == 1
         assert len(one["activeResidues"]) == 2
         assert one["master"]["indeterminate"]
+        assert page.evaluate("""() => {
+          const v=window[Object.keys(window).find(k=>/^viewer_[0-9]+$/.test(k))];
+          return v.selectedAtoms({chain:'A',resi:1}).every(a => !!a.style.stick) &&
+            v.selectedAtoms({chain:'B',resi:2}).every(a => !!a.style.stick) &&
+            v.selectedAtoms({chain:'A',resi:3}).every(a => !a.style.stick);
+        }""")
+        assert hbond.locator(".bc-pair-label").inner_text() == "A SER 1 – B ASP 2 · 3.00 Å"
         page.evaluate("""() => {
           const v=window[Object.keys(window).find(k=>/^viewer_[0-9]+$/.test(k))];
           window.__shapeBefore=v.shapes[0];
@@ -302,6 +349,25 @@ def test_browser_controls_labels_rotation_and_filled_ring_planes() -> None:
         )
         assert np.count_nonzero(changed > 20) > 1000
         assert page.evaluate(state)["shapeCount"] == 3
+        stacking = page.locator("[data-contact-type=pi_stacking_parallel]")
+        stacking.locator("[data-expand]").click()
+        stacking.locator("[data-pair-select]").click()
+        assert page.evaluate(state)["highlightLabelCount"] == 2
+        hbond.locator("[data-pair-select]").click()
+        assert page.evaluate(state)["highlightLabelCount"] == 1
+        assert hbond.locator("[data-pair-check]").is_checked()
+        stacking.locator("[data-pair-check]").uncheck()
+        assert page.evaluate(state)["highlightLabelCount"] == 0
+        assert page.evaluate("""() => {
+          const v=window[Object.keys(window).find(k=>/^viewer_[0-9]+$/.test(k))];
+          return v.selectedAtoms({chain:'A',resi:3}).every(a => !a.style.stick);
+        }""")
+        page.locator("[data-master]").check()
+        page.locator("[data-master]").uncheck()
+        assert page.evaluate("""() => {
+          const v=window[Object.keys(window).find(k=>/^viewer_[0-9]+$/.test(k))];
+          return v.selectedAtoms({}).every(a => !a.style.stick);
+        }""")
 
         empty_page = browser.new_page()
         empty_page.set_content(plot_structure_contacts(structure, ()).to_html())

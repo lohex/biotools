@@ -39,6 +39,11 @@ downloads PDB entry 1CRN and demonstrates MSMS mesh generation, hydrophobic
 surface patches, optional electrostatic-potential mapping, and interactive
 visualization. It requires network access on its first run.
 
+The [`interactions.ipynb`](examples/interactions.ipynb) notebook uses the
+1BRS barnase–barstar complex to demonstrate typed contact analysis,
+distance and interaction matrices, interactive 3D contact controls, and
+HTML export. It downloads the PDB structure on its first run.
+
 ## Installation
 
 Clone the repository and install the base package in editable mode:

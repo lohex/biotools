@@ -331,7 +331,8 @@ class StructureContactView:
             contact.pair_id for contact in contacts
             if enabled_contact_types is None or contact.interaction_type in enabled_contact_types
         }
-        self._highlight: str | None = None
+        self._highlighted_ids: set[str] = set()
+        self._last_highlighted_id: str | None = None
         self._styles = dict(styles)
         self._chain_styles = {key: dict(value) for key, value in chain_styles.items()}
         self._chain_labels = dict(chain_labels)
@@ -373,7 +374,11 @@ class StructureContactView:
 
     @property
     def highlighted_pair_id(self) -> str | None:
-        return self._highlight
+        return self._last_highlighted_id
+
+    @property
+    def highlighted_pair_ids(self) -> frozenset[str]:
+        return frozenset(self._highlighted_ids & self.enabled_pair_ids)
 
     def checkbox_states(self) -> dict[str, Any]:
         pairs = self.contacts
@@ -400,8 +405,9 @@ class StructureContactView:
         return {item.pair_id for item in self.contacts}
 
     def _refresh_state(self) -> None:
-        if self._highlight not in self.enabled_pair_ids:
-            self._highlight = None
+        self._highlighted_ids.intersection_update(self.enabled_pair_ids)
+        if self._last_highlighted_id not in self._highlighted_ids:
+            self._last_highlighted_id = None
         self._push()
 
     def _push(self) -> None:
@@ -463,18 +469,28 @@ class StructureContactView:
         self._refresh_state()
 
     def highlight_contact_pair(self, pair_id: str) -> None:
+        """Highlight a pair without clearing other highlighted pairs."""
+        self.set_contact_pair_highlighted(pair_id, True)
+
+    def set_contact_pair_highlighted(self, pair_id: str, highlighted: bool) -> None:
+        """Toggle one highlight, optionally enabling the pair when selected."""
         if pair_id not in self._included_ids():
             raise KeyError(pair_id)
-        if pair_id not in self._enabled_ids:
+        if highlighted and pair_id not in self._enabled_ids:
             if self._enable_on_select:
                 self._enabled_ids.add(pair_id)
             else:
                 raise ValueError("Cannot highlight a disabled pair")
-        self._highlight = pair_id
+        if highlighted:
+            self._highlighted_ids.add(pair_id)
+            self._last_highlighted_id = pair_id
+        else:
+            self._highlighted_ids.discard(pair_id)
         self._refresh_state()
 
     def clear_highlight(self) -> None:
-        self._highlight = None
+        """Clear all floating contact highlights without hiding contacts."""
+        self._highlighted_ids.clear()
         self._refresh_state()
 
     def set_residue_label_mode(self, chain_id: str, mode: LabelMode) -> None:
@@ -507,7 +523,16 @@ class StructureContactView:
         ))
         kinds = [kind for kind in kinds if any(item.interaction_type == kind for item in contacts)]
         contact_residues = {key for item in contacts for key in item.residues}
-        stick_residues = contact_residues
+        stick_residues = contact_residues & self._residue_universe.keys()
+
+        def pair_label(item: DisplayedContact) -> str:
+            partners = []
+            for key in item.residues:
+                residue = self._residue_universe.get(key, {})
+                label = residue.get("label", f"Residue {key[2]}{key[3]}")
+                partners.append(f"{key[0]} {label}")
+            return f"{' – '.join(partners)} · {item.distance:.2f} Å"
+
         return {
             "contacts": [
                 {
@@ -527,13 +552,15 @@ class StructureContactView:
                     ],
                     "residues": [list(key) for key in item.residues],
                     "label": item.label,
+                    "pairLabel": pair_label(item),
                     "distance": item.distance,
                 }
                 for item in contacts
             ],
             "types": kinds,
             "enabled": sorted(self.enabled_pair_ids),
-            "selected": self._highlight,
+            "selected": self._last_highlighted_id,
+            "highlighted": sorted(self.highlighted_pair_ids),
             "styles": {kind: asdict(self._styles[kind]) for kind in kinds},
             "chainStyles": self._chain_styles,
             "chainLabels": self._chain_labels,
@@ -559,10 +586,11 @@ class StructureContactView:
         ident = escape(self._id, quote=True)
         sidebar = (
             f'<aside class="biotools-contact-controls" aria-label="Interaction controls">'
-            '<div class="bc-head"><label><input type="checkbox" data-master> Interaction types</label></div>'
-            '<div data-types></div>'
+            '<div class="bc-head">Views</div><div data-views></div>'
             '<div class="bc-head">Residue labels</div><div data-chains></div>'
-            '<div class="bc-head">Views</div><div data-views></div></aside>'
+            '<section class="bc-interaction-section">'
+            '<div class="bc-head"><label><input type="checkbox" data-master> Interaction types</label></div>'
+            '<div data-types></div></section></aside>'
             if self._show_controls else ""
         )
         return (
@@ -619,7 +647,9 @@ def plot_structure_contacts(
     """Render typed contacts with synchronized notebook and HTML controls.
 
     Contact detection is not performed. The input structure is copied before
-    optional coordinate transformation or rendering.
+    optional coordinate transformation or rendering. Amino acids participating
+    in visible contacts are shown as sticks by default, independently of
+    highlighting. Set active_contact_sticks=False to disable these sticks.
     """
     import py3Dmol
 
@@ -682,7 +712,9 @@ def plot_structure_contacts(
     if initial_view is not None and initial_view not in presets:
         raise KeyError(initial_view)
 
-    viewer = py3Dmol.view(width=width, height=height)
+    # Keep the molecule clear of the controls on desktop-sized views.
+    canvas_width = width - 360 if show_controls and width >= 720 else width
+    viewer = py3Dmol.view(width=canvas_width, height=height)
     viewer.addModel(_structure_pdb_text(copied), "pdb")
     for chain, style in styled.items():
         viewer.setStyle({"chain": chain}, style)
@@ -701,23 +733,34 @@ def plot_structure_contacts(
 _CONTACT_CSS = """
 .biotools-contact-root{position:relative;font:13px/1.4 system-ui,sans-serif;color:#202124}
 .biotools-contact-controls{position:absolute;right:10px;top:10px;z-index:5;
-  width:260px;max-height:calc(100% - 20px);overflow:auto;box-sizing:border-box;
-  background:rgba(255,255,255,.94);border:1px solid #cbd1d6;border-radius:8px;
-  padding:10px;box-shadow:0 2px 12px #0002}
+  width:340px;max-width:calc(100% - 20px);max-height:calc(100% - 20px);
+  overflow:auto;box-sizing:border-box;background:rgba(255,255,255,.96);
+  border:1px solid #cbd1d6;border-radius:8px;padding:12px;box-shadow:0 2px 12px #0002}
 .biotools-contact-controls .bc-head{font-weight:650;margin:3px 0 7px}
-.biotools-contact-controls details{border-top:1px solid #e5e7eb;padding:5px 0}
-.biotools-contact-controls summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:5px}
-.biotools-contact-controls summary::-webkit-details-marker{display:none}
+.biotools-contact-controls [data-views]{display:flex;gap:5px;margin-bottom:16px}
+.biotools-contact-controls .bc-interaction-section{margin-top:18px;padding-top:14px;
+  border-top:1px solid #cbd1d6}
+.biotools-contact-controls .bc-type{border-top:1px solid #e5e7eb;padding:8px 0}
+.biotools-contact-controls .bc-type-head{display:flex;align-items:center;gap:5px}
+.biotools-contact-controls .bc-type-name{flex:1}
 .biotools-contact-controls input[type=checkbox]{margin:0 5px 0 0;vertical-align:middle}
 .biotools-contact-controls .bc-swatch{width:9px;height:9px;border-radius:50%;
   flex:none;display:inline-block}
-.biotools-contact-controls .bc-pair{display:flex;align-items:center;margin:4px 0 4px 17px;
-  border-radius:4px;padding:2px}
+.biotools-contact-controls .bc-pairs{margin:10px 0 2px 8px;padding:8px;
+  border-left:3px solid #d7dfe8;border-radius:4px;background:#f4f6f8}
+.biotools-contact-controls .bc-pair{display:flex;align-items:center;gap:6px;
+  border-radius:4px;padding:6px 3px}
+.biotools-contact-controls .bc-pair + .bc-pair{border-top:1px solid #e1e5eb}
+.biotools-contact-controls .bc-pair-label{flex:1;min-width:0;font-size:12px}
 .biotools-contact-controls .bc-pair.bc-selected{background:#dbeafe}
 .biotools-contact-controls button{cursor:pointer;border:1px solid #ccd3db;background:#fff;
-  border-radius:4px;color:#202124;font:inherit;padding:2px 5px}
-.biotools-contact-controls .bc-pair button{border:0;background:transparent;text-align:left;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  border-radius:4px;color:#202124;font:inherit;padding:3px 6px}
+.biotools-contact-controls button:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+.biotools-contact-controls [data-expand]{font-size:11px;white-space:nowrap}
+.biotools-contact-controls [data-pair-select]{font-size:11px;flex:none}
+.biotools-contact-controls [data-pair-select]::before{content:"";display:inline-block;
+  width:8px;height:8px;border:1px solid #94a3b8;border-radius:50%;margin-right:4px}
+.biotools-contact-controls [data-pair-select][aria-pressed=true]::before{background:#2563eb;border-color:#2563eb}
 .biotools-contact-controls .bc-chain{margin:5px 0}
 .biotools-contact-controls .bc-chain button{margin-left:4px}
 .biotools-contact-controls button[aria-pressed=true]{background:#dbeafe;border-color:#93b4e8}
@@ -728,11 +771,11 @@ _CONTACT_JS = r"""
 function createBiotoolsContactController(root, viewer, initial) {
   let data = initial;
   let enabled = new Set(data.enabled);
-  let selected = data.selected;
+  let highlighted = new Set(data.highlighted || []);
   let typeShapes = {};
   let planeShapes = {};
   let residueLabels = [];
-  let highlightLabel = null;
+  let highlightLabels = [];
   let lastViewName = null;
   const controls = root.querySelector('.biotools-contact-controls');
   const byId = () => new Map(data.contacts.map(c => [c.id, c]));
@@ -802,7 +845,7 @@ function createBiotoolsContactController(root, viewer, initial) {
       data.stickResidues.forEach(r => {
         if(active.has(residueKey(r))) {
           const [chain,het,num,icode] = r;
-          viewer.addStyle({chain:chain,resi:num,icode:icode||undefined},
+          viewer.addStyle({chain:chain,resi:num,icode:icode||' ',hetflag:!!het},
             {stick:{radius:0.18}});
         }
       });
@@ -820,21 +863,18 @@ function createBiotoolsContactController(root, viewer, initial) {
     });
   }
   function refreshHighlight() {
-    if(highlightLabel) {
-      viewer.removeLabel(highlightLabel);
-      highlightLabel = null;
-    }
-    const contact = byId().get(selected);
-    if(!contact || !enabled.has(selected)) {
-      selected = null;
-      return;
-    }
-    highlightLabel = viewer.addLabel(contact.label,{
-      position:contact.anchor,backgroundColor:'#ffffff',
-      backgroundOpacity:0.90,borderThickness:2,
-      borderColor:data.styles[contact.type].color,
-      fontColor:'#202124',fontSize:12,inFront:true,
-      screenOffset:{x:0,y:-12}
+    highlightLabels.forEach(label => viewer.removeLabel(label));
+    highlightLabels = [];
+    highlighted = new Set([...highlighted].filter(id => enabled.has(id) && byId().has(id)));
+    highlighted.forEach(id => {
+      const contact = byId().get(id);
+      highlightLabels.push(viewer.addLabel(contact.pairLabel,{
+        position:contact.anchor,backgroundColor:'#ffffff',
+        backgroundOpacity:0.90,borderThickness:2,
+        borderColor:data.styles[contact.type].color,
+        fontColor:'#202124',fontSize:12,inFront:true,
+        screenOffset:{x:0,y:-12}
+      }));
     });
   }
   function applyView(name) {
@@ -868,7 +908,10 @@ function createBiotoolsContactController(root, viewer, initial) {
       input.checked = enabled.has(input.dataset.pairCheck);
     });
     controls.querySelectorAll('[data-pair-row]').forEach(row => {
-      row.classList.toggle('bc-selected',row.dataset.pairRow === selected);
+      row.classList.toggle('bc-selected',highlighted.has(row.dataset.pairRow));
+    });
+    controls.querySelectorAll('[data-pair-select]').forEach(button => {
+      button.setAttribute('aria-pressed',String(highlighted.has(button.dataset.pairSelect)));
     });
     controls.querySelectorAll('[data-label-check]').forEach(input => {
       input.checked = !!data.labelEnabled[input.dataset.labelCheck] &&
@@ -907,29 +950,45 @@ function createBiotoolsContactController(root, viewer, initial) {
     viewsBox.replaceChildren();
     if(!data.contacts.length) typesBox.append(el('div','bc-empty','No contacts'));
     data.types.forEach(kind => {
-      const details = el('details');
-      const summary = el('summary');
+      const group = el('div','bc-type');
+      group.dataset.contactType = kind;
+      const header = el('div','bc-type-head');
       const input = el('input');
       input.type = 'checkbox';
       input.dataset.typeCheck = kind;
+      input.setAttribute('aria-label','Show '+data.styles[kind].label);
       const swatch = el('span','bc-swatch');
       swatch.style.backgroundColor = data.styles[kind].color;
-      summary.append(input,swatch,el('span','',data.styles[kind].label));
-      details.append(summary);
-      data.contacts.filter(c => c.type === kind).forEach(c => {
+      const contacts = data.contacts.filter(c => c.type === kind);
+      const expand = el('button','','Show '+contacts.length+
+        (contacts.length === 1 ? ' contact ▾' : ' contacts ▾'));
+      expand.type = 'button';
+      expand.dataset.expand = kind;
+      expand.setAttribute('aria-expanded','false');
+      const list = el('div','bc-pairs');
+      list.dataset.pairs = kind;
+      list.id = root.id+'-'+kind+'-pairs';
+      list.hidden = true;
+      expand.setAttribute('aria-controls',list.id);
+      header.append(input,swatch,el('span','bc-type-name',data.styles[kind].label),expand);
+      group.append(header,list);
+      contacts.forEach(c => {
         const row = el('div','bc-pair');
         row.dataset.pairRow = c.id;
         const check = el('input');
         check.type = 'checkbox';
         check.dataset.pairCheck = c.id;
-        const button = el('button','',c.label);
+        check.setAttribute('aria-label','Show '+c.pairLabel);
+        check.title = 'Show contact';
+        const button = el('button','','Highlight');
         button.type = 'button';
         button.dataset.pairSelect = c.id;
-        button.title = c.id;
-        row.append(check,button);
-        details.append(row);
+        button.setAttribute('aria-label','Highlight '+c.pairLabel);
+        button.title = 'Toggle highlighting independently of other contacts';
+        row.append(check,el('span','bc-pair-label',c.pairLabel),button);
+        list.append(row);
       });
-      typesBox.append(details);
+      typesBox.append(group);
     });
     Object.entries(data.chainLabels).forEach(([chain,label]) => {
       const row = el('div','bc-chain');
@@ -968,15 +1027,15 @@ function createBiotoolsContactController(root, viewer, initial) {
     if(value) enabled.add(id); else enabled.delete(id);
     renderScene();
   }
-  function highlight(id) {
+  function highlight(id,value=true) {
     if(!byId().has(id)) return;
-    if(!enabled.has(id)) {
+    if(value && !enabled.has(id)) {
       if(data.enableOnSelect) {
         enabled.add(id);
         renderScene();
       } else return;
     }
-    selected = id;
+    if(value) highlighted.add(id); else highlighted.delete(id);
     refreshHighlight();
     syncControls();
     viewer.render();
@@ -1002,7 +1061,17 @@ function createBiotoolsContactController(root, viewer, initial) {
     controls.addEventListener('click',event => {
       const target = event.target.closest('button');
       if(!target) return;
-      if(target.dataset.pairSelect) highlight(target.dataset.pairSelect);
+      if(target.dataset.expand) {
+        const group = target.closest('[data-contact-type]');
+        const list = group.querySelector('[data-pairs]');
+        list.hidden = !list.hidden;
+        target.setAttribute('aria-expanded',String(!list.hidden));
+        target.textContent = (list.hidden ? 'Show ' : 'Hide ')+list.children.length+
+          (list.children.length === 1 ? ' contact ' : ' contacts ')+(list.hidden ? '▾' : '▴');
+      } else if(target.dataset.pairSelect) {
+        const id = target.dataset.pairSelect;
+        highlight(id,!highlighted.has(id));
+      }
       else if(target.dataset.labelMode) {
         const [chain,mode] = target.dataset.labelMode.split('|');
         data.labelModes[chain] = mode;
@@ -1028,13 +1097,13 @@ function createBiotoolsContactController(root, viewer, initial) {
     load(next) {
       data = next;
       enabled = new Set(data.enabled);
-      selected = data.selected;
+      highlighted = new Set(data.highlighted || []);
       buildControls();
       renderScene();
       if(data.viewName) {applyView(data.viewName);viewer.render();}
     },
     setAll, setType, setPair, highlight,
-    clearHighlight() {selected=null;refreshHighlight();syncControls();viewer.render();},
+    clearHighlight() {highlighted.clear();refreshHighlight();syncControls();viewer.render();},
     setLabelMode(chain,mode) {
       data.labelModes[chain]=mode;data.labelEnabled[chain]=mode!=='off';
       rebuildSticksAndLabels();syncControls();viewer.render();
@@ -1042,14 +1111,14 @@ function createBiotoolsContactController(root, viewer, initial) {
     setView(name) {applyView(name);syncControls();viewer.render();},
     state() {
       return {
-        enabled:[...enabled],selected:selected,activeResidues:[...activeResidues()],
+        enabled:[...enabled],highlighted:[...highlighted],activeResidues:[...activeResidues()],
         master:checkboxState(data.contacts.map(c=>c.id)),
         types:Object.fromEntries(data.types.map(kind=>[
           kind,checkboxState(data.contacts.filter(c=>c.type===kind).map(c=>c.id))
         ])),
         shapeCount:Object.keys(typeShapes).length+Object.keys(planeShapes).length,
         residueLabelCount:residueLabels.length,
-        highlightLabelCount:highlightLabel ? 1 : 0
+        highlightLabelCount:highlightLabels.length
       };
     }
   };

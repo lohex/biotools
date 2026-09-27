@@ -654,14 +654,26 @@ contact_view.write_html("contacts.html")
 
 `contact_types` excludes contact types from the document.
 `enabled_contact_types` keeps included types available but initially hidden.
-The sidebar has master, type, and individual-pair checkboxes. Its pair buttons
-show a floating interaction label; selecting a pair does not change the line
-radius. `show_contact_types()` and `show_contact_pairs()` change which
+The sidebar puts Views first, followed by Residue labels and Interaction types.
+Each type has a Show contacts button that expands a separated list of residue
+pairs, formatted as chain, residue name, position, and distance.
+The checkboxes control visibility. Each pair has an independent Highlight
+toggle, so multiple visible contacts can have floating labels at once.
+Highlighting does not change the line radius. Residues participating in visible
+contacts are drawn as sticks by default (`active_contact_sticks=True`); hiding
+their last visible contact removes these additional sticks. `show_contact_types()` and `show_contact_pairs()` change which
 contacts are serialized the next time the view is displayed or saved.
 `set_contact_type_enabled()`, `set_contact_pair_enabled()`,
 `set_all_contacts_enabled()`, `highlight_contact_pair()`,
+`set_contact_pair_highlighted()`, `clear_highlight()`,
 `set_residue_label_mode()`, and `set_view()` change state from Python.
+`highlighted_pair_ids` contains all highlighted pairs;
+`highlighted_pair_id` retains the last highlighted pair for compatibility.
 The exported HTML offers the same visibility and view controls in the browser.
+
+The [1BRS interactions notebook](../../examples/interactions.ipynb) walks
+through preparation, typed analysis, aggregation, 2D matrices, 3D controls,
+and HTML export with a real protein complex.
 
 Contact styles can be overridden through `contact_styles=`; ring planes use
 `ring_opacity=`. A 4×4 rigid `coordinate_transform` or a callable that

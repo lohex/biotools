@@ -8,6 +8,10 @@ release is published.
 
 ### Added
 
+
+- Added an executable 1BRS interactions notebook covering typed contact
+  analysis, aggregation, distance and interaction matrices, interactive 3D
+  contact filtering, and standalone HTML export.
 - Added `plot_structure_contacts()` with typed contact geometry, grouped
   dashed connections, aromatic planes, water bridges, synchronized pair/type
   controls, residue labels, view presets, and standalone interactive HTML.
@@ -48,6 +52,15 @@ release is published.
 
 ### Changed
 
+- Made the interactions notebook use the existing default stick display for
+  amino acids participating in visible contacts without an explicit option.
+
+- Reordered contact-view controls with Views first and separated contact lists,
+  explicit expansion buttons, residue-pair descriptions, and independent
+  visibility/highlight toggles supporting multiple highlighted contacts.
+- Translated the interactions notebook into English and added a demonstration
+  of simultaneous highlights and visible-contact residue sticks.
+
 - Made MD pipeline stages accept preceding result objects directly, with
   configurable automatic selection between coordinates, XML States, and
   configuration-verified checkpoints.
@@ -64,6 +77,9 @@ release is published.
   backends score candidates, and why neither requires a complete solvent box.
 
 ### Fixed
+
+- Fixed active-contact sticks selecting no atoms for residues with a blank
+  insertion code, with browser checks for visibility and stick removal.
 
 - Added compatibility with both upstream and Ubuntu/Debian FreeSASA CLI depth
   options and JSON structure keys without masking unrelated FreeSASA errors.
