@@ -8,6 +8,9 @@ release is published.
 
 ### Added
 
+- Extended interactive contact views with display-frame virtual mediator points
+  for water bridges, escaped title and subtitle, exclusion and diagnostic notes,
+  and separate residue-label universes per chain.
 - Added a top-level Hide/Show controls button to collapse the contact-view
   controller while preserving contact visibility, highlights, and open lists.
 - Extended browser regression coverage for collapsing and reopening contact
@@ -55,6 +58,10 @@ release is published.
 
 ### Changed
 
+- Increased the package version from `0.5.1` to `0.7.1` for this commit and
+  push under the repository versioning rule.
+- Documented the new public contact-view options and marked the biotools tasks
+  complete in the pMHC viewer extension plan; pMHCdb integration remains open.
 - Increased the package version from `0.3.1` to `0.5.1` for this commit and
   push under the repository versioning rule.
 - Stopped tracking temporary Playwright browser-inspection logs and snapshots;

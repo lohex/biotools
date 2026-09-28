@@ -17,7 +17,7 @@ import numpy as np
 from Bio.PDB.Polypeptide import is_aa
 
 from ._contacts import AROMATIC_RINGS
-from .contacts import AtomReference, ContactAnalysisResult, ContactObservation
+from .contacts import AtomReference, ContactAnalysisResult, ContactDiagnostic, ContactObservation
 from .visualization import (
     _CONTACT_TYPE_COLORS,
     _CONTACT_TYPE_LABELS,
@@ -188,6 +188,7 @@ def _normalized_contacts(
     structure: Any,
     observations: Iterable[ContactObservation],
     styles: Mapping[str, ContactStyle],
+    mediator_points: Mapping[ContactObservation, Point],
 ) -> tuple[DisplayedContact, ...]:
     coordinates = _atom_coordinates(structure)
     ordered = sorted(
@@ -208,10 +209,9 @@ def _normalized_contacts(
         pair_id = f"pair-{digest}-{occurrence[digest]}"
         start = _group_center(observation.partner_a, coordinates)
         end = _group_center(observation.partner_b, coordinates)
-        water = (
-            _group_center(observation.mediator_waters, coordinates)
-            if observation.mediator_waters else None
-        )
+        water = mediator_points.get(observation)
+        if water is None and observation.mediator_waters:
+            water = _group_center(observation.mediator_waters, coordinates)
         anchor = water if water is not None else _point((np.asarray(start) + end) / 2)
         residues = tuple(dict.fromkeys(
             _residue_key(ref)
@@ -310,7 +310,11 @@ class StructureContactView:
         chain_styles: Mapping[str, Mapping[str, Any]],
         chain_labels: Mapping[str, str],
         residue_universe: Mapping[ResidueKey, Mapping[str, Any]],
-        residue_label_universe: str,
+        residue_label_universe: Mapping[str, str],
+        title: str,
+        subtitle: str | None,
+        excluded_contact_types: tuple[str, ...],
+        diagnostics: tuple[ContactDiagnostic, ...],
         residue_labels: Mapping[str, LabelMode],
         view_presets: Mapping[str, tuple[float, ...]],
         initial_view: str | None,
@@ -337,7 +341,11 @@ class StructureContactView:
         self._chain_styles = {key: dict(value) for key, value in chain_styles.items()}
         self._chain_labels = dict(chain_labels)
         self._residue_universe = dict(residue_universe)
-        self._residue_label_universe = residue_label_universe
+        self._residue_label_universe = dict(residue_label_universe)
+        self.title = title
+        self.subtitle = subtitle
+        self.excluded_contact_types = excluded_contact_types
+        self.diagnostics = diagnostics
         self._label_modes = dict(residue_labels)
         self._label_enabled = {
             chain: mode != "off" for chain, mode in residue_labels.items()
@@ -566,7 +574,7 @@ class StructureContactView:
             "chainLabels": self._chain_labels,
             "residueUniverse": [
                 value for key, value in self._residue_universe.items()
-                if self._residue_label_universe == "all" or key in contact_residues
+                if self._residue_label_universe[key[0]] == "all" or key in contact_residues
             ],
             "stickResidues": [list(key) for key in sorted(stick_residues)],
             "labelModes": self._label_modes,
@@ -594,11 +602,35 @@ class StructureContactView:
             '<div class="bc-head">Residue labels</div><div data-chains></div>'
             '<section class="bc-interaction-section">'
             '<div class="bc-head"><label><input type="checkbox" data-master> Interaction types</label></div>'
-            '<div data-types></div></section></div></aside>'
+            '<div data-types></div></section>'
+            + (
+                '<section class="bc-notes" aria-label="Excluded contact types">'
+                '<div class="bc-head">Excluded types</div><ul>'
+                + ''.join(f'<li>{escape(kind)}</li>' for kind in self.excluded_contact_types)
+                + '</ul></section>' if self.excluded_contact_types else ''
+            )
+            + (
+                '<section class="bc-notes" aria-label="Contact diagnostics">'
+                '<div class="bc-head">Diagnostics</div><ul>'
+                + ''.join(
+                    f'<li><strong>{escape(item.severity)}</strong> '
+                    f'<code>{escape(item.code)}</code>: '
+                    f'{escape(item.message)}</li>' for item in self.diagnostics
+                )
+                + '</ul></section>' if self.diagnostics else ''
+            )
+            + '</div></aside>'
             if self._show_controls else ""
         )
+        header = (
+            '<header class="biotools-contact-header">'
+            f'<h1>{escape(self.title)}</h1>'
+            + (f'<p>{escape(self.subtitle)}</p>' if self.subtitle else '')
+            + '</header>'
+        )
         return (
-            f'<div class="biotools-contact-root" id="{ident}" '
+            header
+            + f'<div class="biotools-contact-root" id="{ident}" '
             f'style="width:{self._width}px;height:{self._height}px">'
             f"{viewer_html}{sidebar}</div>"
             f"<style>{_CONTACT_CSS}</style>"
@@ -617,7 +649,7 @@ class StructureContactView:
     def to_html(self) -> str:
         return (
             "<!doctype html><html><head><meta charset=\"utf-8\">"
-            "<title>Structure contacts</title></head><body>"
+            f"<title>{escape(self.title)}</title></head><body>"
             + self._body_html() + "</body></html>"
         )
 
@@ -637,7 +669,12 @@ def plot_structure_contacts(
     contact_types: Iterable[str] | None = None,
     enabled_contact_types: Iterable[str] | None = None,
     residue_labels: Mapping[str, LabelMode] | None = None,
-    residue_label_universe: Literal["all", "contact_residues"] = "all",
+    residue_label_universe: Literal["all", "contact_residues"] | Mapping[str, Literal["all", "contact_residues"]] = "all",
+    mediator_points: Mapping[ContactObservation, Any] | None = None,
+    title: str = "Structure contacts",
+    subtitle: str | None = None,
+    excluded_contact_types: Iterable[str] = (),
+    diagnostics: Iterable[ContactDiagnostic] = (),
     show_controls: bool = True,
     active_contact_sticks: bool = True,
     enable_on_select: bool = True,
@@ -665,8 +702,23 @@ def plot_structure_contacts(
         raise ValueError("width must be a positive integer")
     if isinstance(height, bool) or not isinstance(height, int) or height < 1:
         raise ValueError("height must be a positive integer")
-    if residue_label_universe not in {"all", "contact_residues"}:
-        raise ValueError("residue_label_universe must be 'all' or 'contact_residues'")
+    if not isinstance(residue_label_universe, Mapping) and residue_label_universe not in {"all", "contact_residues"}:
+        raise ValueError("residue_label_universe must be 'all', 'contact_residues', or a chain mapping")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("title must be nonempty text")
+    if subtitle is not None and not isinstance(subtitle, str):
+        raise TypeError("subtitle must be text or None")
+    excluded = tuple(excluded_contact_types)
+    if not all(isinstance(kind, str) and kind for kind in excluded):
+        raise ValueError("excluded_contact_types must contain nonempty strings")
+    display_diagnostics = tuple(diagnostics)
+    if not all(isinstance(item, ContactDiagnostic) for item in display_diagnostics):
+        raise TypeError("diagnostics must contain ContactDiagnostic objects")
+    points = {}
+    for observation, value in (mediator_points or {}).items():
+        if not isinstance(observation, ContactObservation) or observation.interaction_type != "water_bridge":
+            raise ValueError("mediator_points keys must be water-bridge observations")
+        points[observation] = _point(value)
     if not math.isfinite(ring_opacity) or not 0 <= ring_opacity <= 1:
         raise ValueError("ring_opacity must be between 0 and 1")
 
@@ -687,7 +739,7 @@ def plot_structure_contacts(
         raise ValueError(f"Unknown contact types: {sorted(unknown)}")
 
     copied = _copy_and_transform(structure, coordinate_transform)
-    normalized = _normalized_contacts(copied, observations, styles)
+    normalized = _normalized_contacts(copied, observations, styles, points)
     chains = {str(chain.id) for chain in copied.get_chains()}
     styled = {chain: {"cartoon": {"color": "#bfc4c9", "opacity": 0.68}} for chain in chains}
     for chain, style in (chain_styles or {}).items():
@@ -696,6 +748,15 @@ def plot_structure_contacts(
         styled[chain] = dict(style)
     universe = _residue_universe(copied)
     label_chains = {key[0] for key in universe}
+    if isinstance(residue_label_universe, Mapping):
+        unknown_chains = set(residue_label_universe) - label_chains
+        if unknown_chains:
+            raise KeyError(f"Unknown label chains: {sorted(unknown_chains)}")
+        universes = {chain: residue_label_universe.get(chain, "all") for chain in label_chains}
+    else:
+        universes = {chain: residue_label_universe for chain in label_chains}
+    if set(universes.values()) - {"all", "contact_residues"}:
+        raise ValueError("Each residue label universe must be 'all' or 'contact_residues'")
     labels = {
         chain: str((chain_labels or {}).get(chain, chain))
         for chain in sorted(label_chains)
@@ -726,8 +787,9 @@ def plot_structure_contacts(
     viewer.render()
     return StructureContactView(
         viewer, normalized, styles=styles, chain_styles=styled, chain_labels=labels,
-        residue_universe=universe, residue_label_universe=residue_label_universe,
-        residue_labels=modes, view_presets=presets,
+        residue_universe=universe, residue_label_universe=universes,
+        title=title, subtitle=subtitle, excluded_contact_types=excluded,
+        diagnostics=display_diagnostics, residue_labels=modes, view_presets=presets,
         initial_view=initial_view, show_controls=show_controls,
         enable_on_select=enable_on_select, active_contact_sticks=active_contact_sticks,
         ring_opacity=ring_opacity, width=width, height=height,
@@ -735,6 +797,9 @@ def plot_structure_contacts(
     )
 
 _CONTACT_CSS = """
+.biotools-contact-header{font:13px/1.4 system-ui,sans-serif;color:#202124;margin:0 0 10px}
+.biotools-contact-header h1{font-size:18px;margin:0 0 3px}
+.biotools-contact-header p{margin:0;color:#555}
 .biotools-contact-root{position:relative;font:13px/1.4 system-ui,sans-serif;color:#202124}
 .biotools-contact-controls{position:absolute;right:10px;top:10px;z-index:5;
   width:340px;max-width:calc(100% - 20px);max-height:calc(100% - 20px);
@@ -772,6 +837,9 @@ _CONTACT_CSS = """
 .biotools-contact-controls .bc-chain button{margin-left:4px}
 .biotools-contact-controls button[aria-pressed=true]{background:#dbeafe;border-color:#93b4e8}
 .biotools-contact-controls .bc-empty{color:#69717b;font-style:italic}
+.biotools-contact-controls .bc-notes{border-top:1px solid #cbd1d6;margin-top:14px;padding-top:10px}
+.biotools-contact-controls .bc-notes ul{margin:0;padding-left:19px}
+.biotools-contact-controls .bc-notes li{margin:3px 0;overflow-wrap:anywhere}
 """
 
 _CONTACT_JS = r"""

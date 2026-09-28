@@ -682,6 +682,22 @@ Contact styles can be overridden through `contact_styles=`; ring planes use
 returns an aligned copy can orient the structure before rendering. Named view
 presets accept a four-number rotation quaternion or an eight-number 3Dmol view.
 
+For water-bridge observations without a water atom in the structure, pass
+`mediator_points={observation: (x, y, z)}`. These are **display-frame**
+coordinates: when using `coordinate_transform`, transform the mediator points
+with the same transform before passing them. Each virtual water is drawn as a
+sphere between two dashed bridge legs without modifying the structure.
+Coordinates must be finite; the mapping keys must be water-bridge observations.
+
+`title=` and `subtitle=` add an HTML header; the title also sets the document
+title. `excluded_contact_types=` lists intentionally omitted contact types,
+while `diagnostics=` accepts `ContactDiagnostic` records for contacts skipped
+because of invalid or unavailable geometry. All rendered text is HTML-escaped.
+For chain-specific labels, pass a mapping such as
+`residue_label_universe={"A": "contact_residues", "B": "all"}`. Unspecified
+chains default to `all`. The `Active` mode still follows currently visible
+contacts for each chain.
+
 ## Compatibility imports
 
 The preferred public imports come from `biotools.structure`. The historical

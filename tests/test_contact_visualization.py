@@ -12,6 +12,7 @@ from Bio.PDB import Atom, Chain, Model, Residue, Structure
 from biotools.structure import (
     AtomReference,
     ContactAnalysisResult,
+    ContactDiagnostic,
     ContactObservation,
     ContactStyle,
     GeometryMeasurement,
@@ -248,6 +249,53 @@ def test_zero_contacts_escaping_transform_and_html_file(tmp_path: Path) -> None:
     assert "\\u003cimg" in html
 
 
+
+def test_virtual_mediator_header_diagnostics_and_chain_label_universes() -> None:
+    structure, observations = _fixture()
+    water = next(item for item in observations if item.interaction_type == "water_bridge")
+    virtual = ContactObservation(
+        interaction_type=water.interaction_type,
+        partner_a=water.partner_a,
+        partner_b=water.partner_b,
+        role_a=water.role_a,
+        role_b=water.role_b,
+        geometry=water.geometry,
+        criteria=water.criteria,
+        rule_profile=water.rule_profile,
+    )
+    matrix = np.eye(4)
+    matrix[:3, 3] = (3, 4, 5)
+    view = plot_structure_contacts(
+        structure, (virtual,), coordinate_transform=matrix,
+        mediator_points={virtual: (4, 5, 6)},
+        title="Peptide–MHC <interactions>", subtitle="Allele <A*02:01>",
+        excluded_contact_types=("vdw <filtered>",),
+        diagnostics=(ContactDiagnostic("bad_geometry", "Skipped <contact>"),),
+        residue_labels={"A": "all", "B": "all"},
+        residue_label_universe={"A": "contact_residues", "B": "all"},
+    )
+    assert view.contacts[0].water == (4, 5, 6)
+    assert view.contacts[0].anchor == (4, 5, 6)
+    payload = view._payload()
+    assert sum(row["key"][0] == "A" for row in payload["residueUniverse"]) == 1
+    assert sum(row["key"][0] == "B" for row in payload["residueUniverse"]) == 2
+    assert payload['contacts'][0]['water'] == {'x': 4.0, 'y': 5.0, 'z': 6.0}
+    assert 'shape.addSphere({center:c.water' in view.to_html()
+    assert 'leg(c.start,c.water)' in view.to_html()
+    assert 'leg(c.water,c.end)' in view.to_html()
+    html = view.to_html()
+    assert '<title>Peptide–MHC &lt;interactions&gt;</title>' in html
+    assert 'Allele &lt;A*02:01&gt;' in html
+    assert 'vdw &lt;filtered&gt;' in html
+    assert 'Skipped &lt;contact&gt;' in html
+    assert '<contact>' not in html
+    assert next(structure.get_atoms()).coord[0] == 0
+    with pytest.raises(ValueError, match="finite"):
+        plot_structure_contacts(structure, (virtual,), mediator_points={virtual: (1, np.nan, 2)})
+    with pytest.raises(KeyError, match="Unknown label chains"):
+        plot_structure_contacts(structure, (virtual,), residue_label_universe={"Q": "all"})
+
+
 def test_dense_contacts_use_type_grouping_in_browser_controller() -> None:
     structure, observations = _fixture()
     hbond = observations[0]
@@ -379,6 +427,60 @@ def test_browser_controls_labels_rotation_and_filled_ring_planes() -> None:
           const v=window[Object.keys(window).find(k=>/^viewer_[0-9]+$/.test(k))];
           return v.selectedAtoms({}).every(a => !a.style.stick);
         }""")
+
+        virtual = ContactObservation(
+            interaction_type="water_bridge",
+            partner_a=observations[1].partner_a,
+            partner_b=observations[1].partner_b,
+            role_a="anchor", role_b="anchor", geometry=(), criteria=(),
+            rule_profile="refined",
+        )
+        virtual_view = plot_structure_contacts(
+            structure, (virtual,), mediator_points={virtual: (1.5, 1.0, 0.0)},
+            title="pMHC <view>", subtitle="Allele <A>",
+            excluded_contact_types=("van_der_waals_contact",),
+            diagnostics=(ContactDiagnostic("skipped", "Bad <geometry>"),),
+            residue_labels={"A": "all", "B": "all"},
+            residue_label_universe={"A": "contact_residues", "B": "all"},
+        )
+        virtual_page = browser.new_page()
+        virtual_page.set_content(virtual_view.to_html(), wait_until="load")
+        virtual_page.wait_for_function(
+            "Object.values(window.__biotoolsContactViews||{}).length === 1"
+        )
+        assert virtual_page.locator("h1").inner_text() == "pMHC <view>"
+        assert virtual_page.locator(".biotools-contact-header p").inner_text() == "Allele <A>"
+        assert virtual_page.get_by_role("region", name="Excluded contact types").is_visible()
+        assert virtual_page.get_by_role("region", name="Contact diagnostics").inner_text().endswith("Bad <geometry>")
+        assert virtual_page.evaluate(state)["residueLabelCount"] == 3
+        counts = virtual_page.evaluate("""payload => {
+          const viewer=window[Object.keys(window).find(k=>/^viewer_[0-9]+$/.test(k))];
+          const controller=Object.values(window.__biotoolsContactViews)[0];
+          const counts={legs:0,spheres:0};
+          const original=viewer.addShape.bind(viewer);
+          viewer.addShape=spec => {
+            const shape=original(spec);
+            const dashed=shape.addDashedCylinder.bind(shape);
+            const sphere=shape.addSphere.bind(shape);
+            shape.addDashedCylinder=(...args)=>{counts.legs++;return dashed(...args);};
+            shape.addSphere=(...args)=>{counts.spheres++;return sphere(...args);};
+            return shape;
+          };
+          controller.load(payload);
+          return counts;
+        }""", virtual_view._payload())
+        assert counts == {"legs": 2, "spheres": 1}
+        virtual_page.locator("[data-label-mode='A|active']").click()
+        virtual_page.locator("[data-label-mode='B|active']").click()
+        virtual_page.locator("[data-master]").uncheck()
+        assert virtual_page.evaluate(state)["residueLabelCount"] == 0
+        virtual_page.locator("[data-type-check=water_bridge]").check()
+        assert virtual_page.evaluate(state)["residueLabelCount"] == 2
+        virtual_page.locator("[data-expand=water_bridge]").click()
+        virtual_page.locator("[data-pair-check]").uncheck()
+        assert virtual_page.evaluate(state)["residueLabelCount"] == 0
+        virtual_page.locator("[data-pair-check]").check()
+        assert virtual_page.evaluate(state)["residueLabelCount"] == 2
 
         empty_page = browser.new_page()
         empty_page.set_content(plot_structure_contacts(structure, ()).to_html())
