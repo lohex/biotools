@@ -55,6 +55,10 @@ release is published.
 
 ### Changed
 
+- Increased the package version from `0.3.1` to `0.5.1` for this commit and
+  push under the repository versioning rule.
+- Stopped tracking temporary Playwright browser-inspection logs and snapshots;
+  ignore `.playwright-cli/` so future test artifacts stay local.
 - Increased the package version from `0.1.1` to `0.3.1`, counting the commit
   and push as separate subversion increments under the repository policy.
 - Included the existing Playwright console log and UI snapshot from the
