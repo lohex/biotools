@@ -32,7 +32,7 @@ from .md_simulations.minimization import (
     _should_restart_optimizer,
     minimize,
 )
-from .md_simulations.plotting import plot_md_result
+from .md_simulations.plotting import plot_md_result, plot_trajectory
 from .md_simulations.preparation import fix_pdb, model_solvent
 from .md_simulations.production import ProductionResult, run_production
 from .md_simulations.soft_equilibration import soft_equilibrate_nvt
@@ -59,6 +59,7 @@ __all__ = [
     "minimize",
     "model_solvent",
     "plot_md_result",
+    "plot_trajectory",
     "run_production",
     "soft_equilibrate_nvt",
 ]

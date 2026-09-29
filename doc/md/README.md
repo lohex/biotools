@@ -20,6 +20,7 @@
   - [Custom convergence monitoring](#custom-convergence-monitoring)
 - [States, checkpoints, and continuation](#states-checkpoints-and-continuation)
 - [Production runs](#production-runs)
+- [Trajectory visualization](#trajectory-visualization)
 - [Diagnostic plots](#diagnostic-plots)
 - [Platform selection](#platform-selection)
 - [Logging](#logging)
@@ -436,6 +437,23 @@ The final PDB is a coordinate snapshot and does not contain velocities. Keep
 the XML State for portable state transfer or the checkpoint for exact restart.
 Periodic checkpointing limits lost work if a run is interrupted, but does not
 make incompatible simulation configurations interchangeable.
+
+## Trajectory visualization
+
+`plot_trajectory()` animates DCD or XTC frames in py3Dmol using a matching
+PDB topology (or a single-model Biopython structure). The topology must contain
+the same atoms in the same order as the trajectory. Use `start`, `stop`, and
+`step` to select a half-open frame slice. The default limit is 100 selected
+frames; increase `step` or `max_frames` for a longer run.
+
+```python
+from biotools.mdtools import plot_trajectory
+
+view = plot_trajectory("production-final.pdb", "production.xtc", step=10)
+view.show()
+```
+
+The same function is available from `biotools.md_simulations`.
 
 ## Diagnostic plots
 

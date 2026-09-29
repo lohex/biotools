@@ -8,6 +8,8 @@ release is published.
 
 ### Added
 
+- Added `plot_trajectory()` to the MD API for animated DCD/XTC visualization
+  with a matching PDB topology, frame selection, and a configurable frame limit.
 - Extended interactive contact views with display-frame virtual mediator points
   for water bridges, escaped title and subtitle, exclusion and diagnostic notes,
   and separate residue-label universes per chain.
@@ -58,6 +60,10 @@ release is published.
 
 ### Changed
 
+- Increased the package version from `0.7.1` to `0.8.1` for this
+  requested commit.
+- Clarified the repository versioning rule: each user-requested commit raises
+  the subversion by exactly one; pushing that commit does not raise it again.
 - Increased the package version from `0.5.1` to `0.7.1` for this commit and
   push under the repository versioning rule.
 - Documented the new public contact-view options and marked the biotools tasks

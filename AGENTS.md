@@ -13,8 +13,11 @@
 
 ## Package versioning
 
-- Increment the package subversion (the second numeric component) by one for
-  every commit and every push, for example `0.1` -> `0.2` or `0.12` -> `0.13`.
+- For each commit requested by the user, increment the package subversion
+  (the second numeric component) exactly once and by exactly one, for example
+  `0.7.1` -> `0.8.1`. A later push of that commit does not increment the
+  version again. Do not count the commit and its push as two version changes,
+  even when both are requested together.
 - If the user explicitly announces a new version, increment the major version
   instead and reset the subversion to zero, for example `0.12` -> `1.0`.
 - Keep all package version declarations consistent when updating the version.

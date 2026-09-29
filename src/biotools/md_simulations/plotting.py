@@ -1,11 +1,19 @@
-"""Plot diagnostics returned by molecular-dynamics workflows."""
+"""Plot molecular-dynamics diagnostics and trajectories."""
 
 from __future__ import annotations
 
-from typing import Any
+from io import StringIO
+from os import PathLike
+from pathlib import Path
+from typing import Any, TYPE_CHECKING
+
+import numpy as np
 
 from .equilibration import EquilibrationResult
 from .minimization import MinimizationResult
+
+if TYPE_CHECKING:
+    from Bio.PDB.Structure import Structure
 
 
 def _plot_minimization_result(
@@ -199,3 +207,91 @@ def plot_md_result(
     if isinstance(result, MinimizationResult):
         return _plot_minimization_result(result, plt, figsize)
     return _plot_equilibration_result(result, plt, figsize)
+
+
+def _structure_pdb_text(structure: Structure) -> str:
+    from Bio.PDB import PDBIO
+
+    buffer = StringIO()
+    io = PDBIO()
+    io.set_structure(structure)
+    io.save(buffer)
+    return buffer.getvalue()
+
+
+def plot_trajectory(
+    topology: Structure | str | PathLike[str],
+    trajectory: str | PathLike[str],
+    *,
+    start: int = 0,
+    stop: int | None = None,
+    step: int = 1,
+    max_frames: int = 100,
+    interval_ms: int = 100,
+    width: int = 800,
+    height: int = 400,
+) -> Any:
+    """Animate selected DCD/XTC frames in an interactive py3Dmol view.
+
+    ``topology`` is a matching PDB path or single-model Biopython structure.
+    Frames use the topology's atom order and are selected by the half-open
+    ``[start:stop:step]`` slice. Increase ``step`` for long trajectories.
+    """
+    from Bio.PDB import PDBParser
+    from biotite.structure.io import dcd, xtc
+    import py3Dmol
+
+    if isinstance(topology, (str, PathLike)):
+        topology = PDBParser(QUIET=True).get_structure("trajectory", str(topology))
+    if len(list(topology.get_models())) != 1:
+        raise ValueError("topology must contain exactly one model")
+    if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+        raise ValueError("start must be a nonnegative integer")
+    if stop is not None and (
+        isinstance(stop, bool) or not isinstance(stop, int) or stop <= start
+    ):
+        raise ValueError("stop must be an integer greater than start")
+    for name, value in (
+        ("step", step),
+        ("max_frames", max_frames),
+        ("interval_ms", interval_ms),
+        ("width", width),
+        ("height", height),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+
+    reader = {".dcd": dcd.DCDFile, ".xtc": xtc.XTCFile}.get(
+        Path(trajectory).suffix.lower()
+    )
+    if reader is None:
+        raise ValueError("trajectory must be a DCD or XTC file")
+    # Read one extra selected frame to report oversized selections explicitly.
+    read_stop = min(stop, start + step * (max_frames + 1)) if stop is not None else (
+        start + step * (max_frames + 1)
+    )
+    coordinates = reader.read(
+        str(trajectory), start=start, stop=read_stop, step=step
+    ).get_coord()
+    atom_count = sum(1 for _ in topology.get_atoms())
+    if len(coordinates) == 0:
+        raise ValueError("the selected trajectory contains no frames")
+    if len(coordinates) > max_frames:
+        raise ValueError(
+            f"the selected trajectory exceeds max_frames={max_frames}; "
+            "increase step or max_frames"
+        )
+    if coordinates.shape[1:] != (atom_count, 3):
+        raise ValueError(
+            f"trajectory has {coordinates.shape[1]} atoms; topology has {atom_count}"
+        )
+    if not np.isfinite(coordinates).all():
+        raise ValueError("trajectory coordinates must be finite")
+
+    view = py3Dmol.view(width=width, height=height)
+    view.addModel(_structure_pdb_text(topology), "pdb")
+    view.getModel().setCoordinates(coordinates.tolist(), "array")
+    view.setStyle({"model": -1}, {"cartoon": {"color": "spectrum"}})
+    view.zoomTo()
+    view.animate({"loop": "forward", "interval": interval_ms})
+    return view
