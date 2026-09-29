@@ -2,14 +2,15 @@
 
 ## Change documentation
 
-- Document every new feature and bug fix in `doc/changes.md` under `Unreleased`
-  as part of the same change, before committing or pushing.
+- Document every new feature and bug fix in `doc/changes.md` as part of the
+  same change. Record ongoing work under `Unreleased`.
 - Update `doc/changes.md` with every change that affects users, packaging,
   documentation, tests, or development workflows.
-- Record ongoing work under `Unreleased` so the file always describes what has
-  changed since the latest release.
-- When publishing a release, move the accumulated entries into a dated version
-  section and restore an empty `Unreleased` section.
+- Whenever the package version increases, move the accumulated entries into a
+  dated `## <version> - YYYY-MM-DD` section before committing. Leave
+  `Unreleased` ready for new work.
+- Do not add version increments as changelog bullet points; the version heading
+  records the increment.
 
 ## Package versioning
 

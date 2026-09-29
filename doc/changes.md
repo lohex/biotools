@@ -1,21 +1,60 @@
 # Changes
 
-This file records user-visible changes since the latest release. Add new work
-to `Unreleased` and move those entries into a dated version section when a
-release is published.
+This file groups changes by package version. Record ongoing work under
+`Unreleased`; when the package version changes, move those entries into a
+dated version section and leave `Unreleased` ready for new work.
 
 ## Unreleased
+
+### Changed
+
+- Organized the changelog into dated package-version sections and clarified
+  the versioning instructions for future updates.
+
+## 0.9.1 - 2026-09-29
 
 ### Added
 
 - Added streaming DCD/XTC contact-frequency analysis across all eight contact
   types, with once-prepared topology, per-frame residue-pair deduplication,
   periodic-image handling, fixed denominators, and fail-fast frame validation.
+
+## 0.8.1 - 2026-09-29
+
+### Added
+
 - Added `plot_trajectory()` to the MD API for animated DCD/XTC visualization
   with a matching PDB topology, frame selection, and a configurable frame limit.
+
+### Changed
+
+- Clarified the repository versioning rule: each user-requested commit raises
+  the subversion by exactly one; pushing that commit does not raise it again.
+
+## 0.7.1 - 2026-09-28
+
+### Added
+
 - Extended interactive contact views with display-frame virtual mediator points
   for water bridges, escaped title and subtitle, exclusion and diagnostic notes,
   and separate residue-label universes per chain.
+
+### Changed
+
+- Documented the new public contact-view options and marked the biotools tasks
+  complete in the pMHC viewer extension plan; pMHCdb integration remains open.
+
+## 0.5.1 - 2026-09-28
+
+### Changed
+
+- Stopped tracking temporary Playwright browser-inspection logs and snapshots;
+  ignore `.playwright-cli/` so future test artifacts stay local.
+
+## 0.3.1 - 2026-09-27
+
+### Added
+
 - Added a top-level Hide/Show controls button to collapse the contact-view
   controller while preserving contact visibility, highlights, and open lists.
 - Extended browser regression coverage for collapsing and reopening contact
@@ -63,22 +102,6 @@ release is published.
 
 ### Changed
 
-- Increased the package version from `0.8.1` to `0.9.1` for this
-  requested commit.
-- Increased the package version from `0.7.1` to `0.8.1` for this
-  requested commit.
-- Clarified the repository versioning rule: each user-requested commit raises
-  the subversion by exactly one; pushing that commit does not raise it again.
-- Increased the package version from `0.5.1` to `0.7.1` for this commit and
-  push under the repository versioning rule.
-- Documented the new public contact-view options and marked the biotools tasks
-  complete in the pMHC viewer extension plan; pMHCdb integration remains open.
-- Increased the package version from `0.3.1` to `0.5.1` for this commit and
-  push under the repository versioning rule.
-- Stopped tracking temporary Playwright browser-inspection logs and snapshots;
-  ignore `.playwright-cli/` so future test artifacts stay local.
-- Increased the package version from `0.1.1` to `0.3.1`, counting the commit
-  and push as separate subversion increments under the repository policy.
 - Included the existing Playwright console log and UI snapshot from the
   contact-view inspection.
 - Replaced the planned ProLIF integration in the peptide–MHC workflow with
@@ -97,13 +120,11 @@ release is published.
   under `Unreleased` in `doc/changes.md` before committing or pushing.
 - Made the interactions notebook use the existing default stick display for
   amino acids participating in visible contacts without an explicit option.
-
 - Reordered contact-view controls with Views first and separated contact lists,
   explicit expansion buttons, residue-pair descriptions, and independent
   visibility/highlight toggles supporting multiple highlighted contacts.
 - Translated the interactions notebook into English and added a demonstration
   of simultaneous highlights and visible-contact residue sticks.
-
 - Made MD pipeline stages accept preceding result objects directly, with
   configurable automatic selection between coordinates, XML States, and
   configuration-verified checkpoints.
@@ -123,7 +144,6 @@ release is published.
 
 - Fixed active-contact sticks selecting no atoms for residues with a blank
   insertion code, with browser checks for visibility and stick removal.
-
 - Added compatibility with both upstream and Ubuntu/Debian FreeSASA CLI depth
   options and JSON structure keys without masking unrelated FreeSASA errors.
 
