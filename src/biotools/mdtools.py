@@ -5,6 +5,15 @@ Implementation details live in small modules under
 ``biotools.mdtools`` import path.
 """
 
+from .md_simulations.analysis import (
+    ContactFrequency,
+    PreparedTrajectoryContacts,
+    ResiduePosition,
+    TrajectoryContactResult,
+    TrajectoryFrame,
+    analyze_trajectory_contacts,
+    prepare_trajectory_contacts,
+)
 from .md_simulations.common import (
     Ensemble,
     MDInput,
@@ -38,6 +47,13 @@ from .md_simulations.production import ProductionResult, run_production
 from .md_simulations.soft_equilibration import soft_equilibrate_nvt
 
 __all__ = [
+    "ContactFrequency",
+    "PreparedTrajectoryContacts",
+    "ResiduePosition",
+    "TrajectoryContactResult",
+    "TrajectoryFrame",
+    "analyze_trajectory_contacts",
+    "prepare_trajectory_contacts",
     "Ensemble",
     "EquilibrationAssessment",
     "EquilibrationCriteria",

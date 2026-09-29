@@ -8,6 +8,9 @@ release is published.
 
 ### Added
 
+- Added streaming DCD/XTC contact-frequency analysis across all eight contact
+  types, with once-prepared topology, per-frame residue-pair deduplication,
+  periodic-image handling, fixed denominators, and fail-fast frame validation.
 - Added `plot_trajectory()` to the MD API for animated DCD/XTC visualization
   with a matching PDB topology, frame selection, and a configurable frame limit.
 - Extended interactive contact views with display-frame virtual mediator points
@@ -60,6 +63,8 @@ release is published.
 
 ### Changed
 
+- Increased the package version from `0.8.1` to `0.9.1` for this
+  requested commit.
 - Increased the package version from `0.7.1` to `0.8.1` for this
   requested commit.
 - Clarified the repository versioning rule: each user-requested commit raises

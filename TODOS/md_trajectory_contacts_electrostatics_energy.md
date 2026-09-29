@@ -1,8 +1,11 @@
 # Trajectory Contacts, Electrostatics, and Direct Interaction Energies
 
-**Status:** Draft. The APIs and scores described here have not yet been
-implemented. The existing eight contact types remain available for snapshot
-analysis.
+**Status:** Partially implemented. `biotools.md_simulations.analysis` now
+streams DCD/XTC frames, prepares topology once, applies all eight snapshot
+contact detectors, handles common-image PBC for compact complexes, and counts
+per-residue-pair contact frequencies online. The advanced precomputed chemistry
+and shared neighbor-list optimization, arbitrary-system PBC validation,
+electrostatics, and interaction-energy scores below remain planned.
 
 ## Goal and Scope
 

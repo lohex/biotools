@@ -21,6 +21,7 @@
 - [States, checkpoints, and continuation](#states-checkpoints-and-continuation)
 - [Production runs](#production-runs)
 - [Trajectory visualization](#trajectory-visualization)
+- [Trajectory contact frequencies](#trajectory-contact-frequencies)
 - [Diagnostic plots](#diagnostic-plots)
 - [Platform selection](#platform-selection)
 - [Logging](#logging)
@@ -454,6 +455,56 @@ view.show()
 ```
 
 The same function is available from `biotools.md_simulations`.
+
+## Trajectory contact frequencies
+
+`analyze_trajectory_contacts()` applies the eight existing biotools contact
+detectors to every selected frame of a DCD or XTC run. The topology PDB must
+contain the same atoms in the same order as the trajectory, including explicit
+hydrogens and waters when those interaction types are needed. Use the saved
+production PDB or a matching topology from the same simulation:
+
+```python
+from biotools.mdtools import analyze_trajectory_contacts
+
+result = analyze_trajectory_contacts(
+    "production-final.pdb", "production.xtc",
+    partners=("B", "A"),  # peptide, then MHC
+    profile="refined",
+    periodic=True,
+)
+for row in result.to_records():
+    print(row["partner_a_position"], row["partner_b_position"],
+          row["interaction_type"], row["frequency"])
+```
+
+A `ProductionResult` can also be passed alone: `analyze_trajectory_contacts(
+production, partners=("B", "A"), periodic=True)`. `start`, `stop`, and `step`
+select the half-open frame slice, while `contact_types` limits the eight
+classifications. For a custom reader, pass an iterable of `TrajectoryFrame`
+objects containing an `(n_atoms, 3)` coordinate array, an optional `(3, 3)`
+box in Å, and an optional frame index. The lower-level
+`prepare_trajectory_contacts()` returns a reusable detector with
+`analyze_frame()` for application-managed frame loops.
+
+Each `(partner_a residue, partner_b residue, interaction type)` contributes at
+most one hit per frame, even when several atom pairs or different waters match.
+`frequency` is `positive_frame_count / valid_frame_count`; all reported pairs
+share the same denominator. Only observed pairs are listed. An invalid selected
+frame raises an error with its index instead of being skipped. The result also
+records the selected frame range, profile and configuration hash, reference
+structure hash, and preparation diagnostics. Water-bridge frequencies may
+include oxygen-only distance candidates when water hydrogens are absent; the
+aggregated rows do not retain evidence level. Review preparation diagnostics
+before interpreting these frequencies.
+
+DCD/XTC frames are read one at a time, while topology and covalent exclusions
+are prepared once. For `periodic=True`, the reader must supply finite box
+vectors. The implementation unwraps bonded components and places the two
+partners and waters into a common periodic image; it is intended for compact
+protein–peptide complexes whose molecular images can be assigned unambiguously.
+Validate unusual box geometries or systems spanning more than one image before
+interpreting contact frequencies.
 
 ## Diagnostic plots
 
